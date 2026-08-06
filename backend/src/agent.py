@@ -13,8 +13,9 @@ from livekit.agents import (
     tokenize,
     room_io,
 )
-from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
+from livekit.plugins import murf, silero, google, deepgram, noise_cancellation, openai
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+import os
 
 logger = logging.getLogger("agent")
 
@@ -22,7 +23,32 @@ load_dotenv(".env.local")
 
 # Change this prompt to change what your voice agent does.
 # See README.md for example prompts (customer support, language tutor, receptionist).
-SYSTEM_PROMPT = """You are a friendly and efficient customer support agent for a tech company. Help users with account issues, billing questions, and product troubleshooting. Be concise, empathetic, and solution-oriented. If you don't know something, say so honestly and offer to escalate. Your responses are concise and without complex formatting, emojis, or symbols."""
+SYSTEM_PROMPT = """You are FinVoice AI.
+You are an intelligent multilingual financial voice assistant built for India.
+Your role is to help users understand personal finance through natural conversations.
+You can help with
+• Budget planning
+• Savings
+• SIP education
+• Mutual Funds explanation
+• Fixed Deposits
+• Banking terminology
+• Credit score awareness
+• Loan explanation
+• EMI calculation concepts
+• Government financial schemes
+• UPI safety
+• Scam awareness
+• Digital payments
+• Financial literacy
+
+Never ask users for Passwords, OTP, CVV, PIN, or Full Account Numbers.
+Never pretend to execute financial transactions.
+Never guarantee investment returns.
+Explain concepts simply.
+Respond in English and Hindi naturally.
+Keep responses short and conversational.
+"""
 
 
 class Assistant(Agent):
@@ -70,16 +96,17 @@ async def my_agent(ctx: JobContext):
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         # See all available models at https://docs.livekit.io/agents/models/stt/
         stt=deepgram.STT(model="nova-3"),
-        # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
         # See all available models at https://docs.livekit.io/agents/models/llm/
-        llm=google.LLM(
-                model="gemini-2.5-flash",
-            ),
+        llm=openai.LLM(
+            model="llama-3.1-8b-instant",
+            base_url="https://api.groq.com/openai/v1",
+            api_key=os.environ.get("GROQ_API_KEY"),
+        ),
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
         tts=murf.TTS(
-                voice="en-US-matthew", 
-                style="Conversation",
+                voice="en-IN-samar", 
+                style="Conversational",
                 tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
                 text_pacing=True
             ),
@@ -114,16 +141,6 @@ async def my_agent(ctx: JobContext):
     await session.start(
         agent=Assistant(),
         room=ctx.room,
-        room_options=room_io.RoomOptions(
-            audio_input=room_io.AudioInputOptions(
-                noise_cancellation=lambda params: (
-                    noise_cancellation.BVCTelephony()
-                    if params.participant.kind
-                    == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
-                    else noise_cancellation.BVC()
-                ),
-            ),
-        ),
     )
 
     # Join the room and connect to the user
