@@ -2,3 +2,5 @@
 .env.*
 !.env.example
 .DS_Store
+
+frontend/public/hero2.mp4

@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { motion } from 'motion/react';
 import { Mic } from 'lucide-react';
+import { FeaturesBento } from './features-bento';
 
 interface WelcomeViewProps {
   startButtonText: string;
@@ -14,8 +15,10 @@ export const WelcomeView = ({
 }: React.ComponentProps<'div'> & WelcomeViewProps) => {
 
   return (
-    <div ref={ref} className="relative min-h-[100svh] w-full bg-black text-white flex flex-col overflow-hidden" style={{ fontFamily: "'Outfit', sans-serif" }}>
+    <div ref={ref} className="w-full h-full overflow-y-auto overflow-x-hidden bg-black text-white flex flex-col" style={{ fontFamily: "'Outfit', sans-serif" }}>
       
+      {/* Hero Section */}
+      <div className="relative min-h-[100svh] w-full flex flex-col overflow-hidden shrink-0">
       {/* Import Modern Font */}
       <style dangerouslySetInnerHTML={{__html: `
         @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
@@ -29,7 +32,7 @@ export const WelcomeView = ({
         playsInline 
         className="absolute inset-0 w-full h-full object-cover z-0"
       >
-        <source src="/hero.mp4" type="video/mp4" />
+        <source src="/hero2.mp4" type="video/mp4" />
       </video>
       
       {/* Subtle Overlay to ensure text readability */}
@@ -97,7 +100,11 @@ export const WelcomeView = ({
         </motion.div>
       </div>
 
+      </div>
+
+      {/* Bento Grid Features */}
+      <FeaturesBento />
+
     </div>
   );
 };
-
