@@ -43,15 +43,15 @@ export const APP_CONFIG_DEFAULTS: AppConfig = {
   isPreConnectBufferEnabled: true,
 
   logo: '/murf-logo.svg',
-  accent: '#4F46E5',
+  accent: '#8B5CF6',
   logoDark: '/murf-logo-dark.svg',
-  accentDark: '#4F46E5',
+  accentDark: '#8B5CF6',
   startButtonText: 'Start Talking',
 
-  audioVisualizerType: 'wave',
-  audioVisualizerWaveLineWidth: 4,
-  audioVisualizerColor: '#06B6D4',
-  audioVisualizerColorDark: '#06B6D4',
+  audioVisualizerType: 'aura',
+  audioVisualizerWaveLineWidth: 3,
+  audioVisualizerColor: '#8B5CF6',
+  audioVisualizerColorDark: '#8B5CF6',
 
   agentName: process.env.AGENT_NAME ?? undefined,
   sandboxId: undefined,

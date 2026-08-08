@@ -1,6 +1,6 @@
 'use client';
 
-import { useTheme } from 'next-themes';
+import { useState, useEffect } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useSessionContext } from '@livekit/components-react';
 import type { AppConfig } from '@/app-config';
@@ -38,24 +38,37 @@ interface ViewControllerProps {
 
 export function ViewController({ appConfig }: ViewControllerProps) {
   const { isConnected, start } = useSessionContext();
-  const { resolvedTheme } = useTheme();
+  const [hasStarted, setHasStarted] = useState(false);
+
+  useEffect(() => {
+    if (isConnected) {
+      setHasStarted(true);
+    }
+  }, [isConnected]);
+
+  // Use either the real start or record that user initiated it
+  const handleStart = () => {
+    setHasStarted(true);
+    start();
+  };
 
   return (
     <AnimatePresence mode="wait">
       {/* Welcome view */}
-      {!isConnected && (
+      {!hasStarted && (
         <MotionWelcomeView
           key="welcome"
           {...VIEW_MOTION_PROPS}
           startButtonText={appConfig.startButtonText}
-          onStartCall={start}
+          onStartCall={handleStart}
         />
       )}
       {/* Session view */}
-      {isConnected && (
+      {hasStarted && (
         <MotionSessionView
           key="session-view"
           {...VIEW_MOTION_PROPS}
+          onBack={() => setHasStarted(false)}
         />
       )}
     </AnimatePresence>
