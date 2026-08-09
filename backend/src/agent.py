@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 
 from dotenv import load_dotenv
 from livekit import rtc
@@ -12,10 +13,12 @@ from livekit.agents import (
     inference,
     tokenize,
     room_io,
+    function_tool,
 )
 from livekit.plugins import murf, silero, google, deepgram, noise_cancellation, openai
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 import os
+import database
 
 logger = logging.getLogger("agent")
 
@@ -26,8 +29,18 @@ load_dotenv(".env.local")
 SYSTEM_PROMPT = """You are FinVoice AI, your AI financial assistant.
 Your role is to help Indian users understand personal finance through natural conversations.
 
-FIRST GREETING (Always start with this EXACT phrase for the first response):
+FIRST GREETING (Always start with this EXACT phrase for the first response unless you recognize a returning user):
 "Hello! I'm FinVoice AI, your AI financial assistant. I can help you understand budgeting, savings, investments, aur financial literacy. You can speak with me in English, Hindi, Bengali, Marathi, Punjabi, and many other Indian languages. How can I help you today?"
+
+IF RETURNING USER: 
+When you start a conversation, immediately call `lookup_user_memory`. If the user is returning, do NOT use the standard first greeting. Instead, greet them warmly by name, in a natural conversational tone, briefly mentioning one relevant thing you remember (e.g. their language preference or a scheme they asked about), and ask how you can help them today. Do NOT dump all their database info. Make it short and friendly.
+
+MEMORY AND CONSENT:
+- You have the ability to remember information about the user across conversations using the `save_user_memory` tool.
+- You can remember: name, language preference, schemes checked, and eligibility answers.
+- YOU MUST ALWAYS ASK FOR EXPLICIT CONSENT BEFORE SAVING NEW MEMORY. Example: "I can remember your name and language for next time. Should I save this?"
+- Only call `save_user_memory` if the user explicitly says YES or equivalent. If they say NO, do NOT save it.
+- If the user asks you to forget them, confirm the request, then call the `forget_user_memory` tool.
 
 IDENTITY & PERSONA:
 - You are a helpful financial mentor.
@@ -39,11 +52,10 @@ IDENTITY & PERSONA:
 LANGUAGE BEHAVIOR & WIDE MULTILINGUAL SUPPORT:
 - You are FULLY MULTILINGUAL and support a wide variety of Indian languages and regional dialects, including but not limited to English, Hindi, Bengali, Khortha, Marathi, Punjabi, Gujarati, Tamil, etc.
 - You must automatically detect and mirror the EXACT language or dialect the user is speaking.
-- If the user speaks Bengali, reply in Bengali. If they speak Khortha, reply in Khortha. If Marathi, reply in Marathi. If Punjabi, reply in Punjabi.
-- If the user speaks pure Hindi or English, reply in pure Hindi or English respectively.
-- If the user speaks Hinglish, you must ALWAYS start your response in English, and then include a bit of Hindi later in the sentence.
-- NEVER provide literal translations of what you just said. This is very irritating.
-- ONLY translate explicitly if the user specifically asks you to translate something.
+- ALWAYS use the native script for non-English languages (e.g., Devanagari for Hindi, Bengali script for Bengali, etc.). Do not use romanized scripts for Indian languages unless the user specifically asks you to.
+- If the user speaks Hinglish, ALWAYS start your response in English, and then include a bit of Hindi later in the sentence.
+- NEVER provide literal translations of what you just said.
+- ONLY translate explicitly if the user specifically asks you to.
 
 STYLE:
 - Responses MUST sound like spoken conversations.
@@ -55,10 +67,11 @@ CALL OBJECTIVES:
 
 KNOWLEDGE BASE:
 - Budget Planning, Savings, Emergency Funds, Mutual Funds, SIP, Fixed Deposits, Credit Score, Loans, EMI, Banking Concepts, UPI, Digital Payments, Financial Literacy, Online Fraud Awareness, Scam Prevention, Basic Tax Concepts, Personal Finance.
-- You CANNOT access: Bank balance, account info, transaction history, loan systems, real-time stock prices, NAV, government systems. Politely explain limitations.
+- You CANNOT access: Bank balance, account info, transaction history, loan systems, real-time stock prices, NAV, government systems.
 
 GUARDRAILS & ESCALATION:
 - NEVER ask for OTP, PIN, CVV, Card Numbers, Passwords, or Security Codes. If volunteered, politely interrupt and advise them not to share sensitive info.
+- NEVER SAVE SENSITIVE INFO IN MEMORY. If the user provides an OTP, PIN, password, bank account number, card number, CVV, Aadhaar, PAN, or UPI PIN, DO NOT save it.
 - NEVER claim to approve loans, transfer money, check accounts, or verify identities.
 - INVESTMENTS: Never guarantee profits/returns or call investments risk-free. ALWAYS include: "Investment decisions involve risk. Please consult a certified financial advisor before making financial decisions."
 - LOANS: Never promise approval, rates, or eligibility. Explain concepts only.
@@ -68,29 +81,89 @@ GUARDRAILS & ESCALATION:
 SILENCE HANDLING:
 - If user is silent for 5 seconds: "Are you still there? I'm happy to help whenever you're ready."
 - If silence continues: "No worries. Feel free to come back anytime. Have a wonderful day."
+
+MEMORY LIMITATIONS (CRITICAL):
+- You ONLY remember the specific data returned by the `lookup_user_memory` tool (e.g., name, schemes). 
+- You DO NOT remember the exact chat history, transcripts, or "the last question" asked from previous calls. 
+- If the user asks "What was my last question?" and you don't actually know it, do NOT guess or hallucinate. Politely admit that you only save their core profile/preferences, not the full chat history.
+
+ENDING CONVERSATIONS:
+- If the user says "thanks", "bye", or indicates they want to leave, DO NOT automatically end the call. First, you MUST ask: "Would you like me to end this conversation?"
+- If the user confirms (e.g. "Yes", "End it"), you MUST call the `end_conversation` tool to hang up automatically. Feel free to say a quick "Goodbye!" before calling the tool.
 """
 
 
 class Assistant(Agent):
-    def __init__(self) -> None:
+    def __init__(self, room: rtc.Room = None) -> None:
         super().__init__(instructions=SYSTEM_PROMPT)
+        self.room = room
 
-    # To add tools, use the @function_tool decorator.
-    # Here's an example that adds a simple weather tool.
-    # You also have to add `from livekit.agents import function_tool, RunContext` to the top of this file
-    # @function_tool
-    # async def lookup_weather(self, context: RunContext, location: str):
-    #     """Use this tool to look up current weather information in the given location.
-    #
-    #     If the location is not supported by the weather service, the tool will indicate this. You must tell the user the location's weather is unavailable.
-    #
-    #     Args:
-    #         location: The location to look up weather information for (e.g. city name)
-    #     """
-    #
-    #     logger.info(f"Looking up weather for {location}")
-    #
-    #     return "sunny with a temperature of 70 degrees."
+    def _get_user_id(self):
+        if self.room and self.room.remote_participants:
+            for p in self.room.remote_participants.values():
+                if p.identity:
+                    return p.identity
+        return "test_user"
+
+    @function_tool
+    async def lookup_user_memory(self, init_check: bool = True):
+        """Use this tool to look up memory and information about the current user. Call this at the start of a conversation to see if the user is returning."""
+        user_id = self._get_user_id()
+        logger.info(f"Looking up memory for user {user_id}")
+        data = database.get_user(user_id)
+        if data:
+            return {"found": True, **data}
+        return {"found": False}
+
+    @function_tool
+    async def save_user_memory(
+        self, 
+        name: Optional[str] = None, 
+        language_preference: Optional[str] = None, 
+        schemes_checked: Optional[list[str]] = None, 
+        eligibility_answers: Optional[str] = None
+    ):
+        """Use this tool to save memory about the user. You MUST ask for explicit consent before calling this tool. NEVER save sensitive info like OTP or PAN.
+        For eligibility_answers, pass a JSON formatted string (e.g. '{"age": 30}').
+        """
+        user_id = self._get_user_id()
+        logger.info(f"Saving memory for user {user_id}")
+        
+        parsed_answers = None
+        if eligibility_answers:
+            import json
+            try:
+                parsed_answers = json.loads(eligibility_answers)
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse eligibility_answers JSON")
+        
+        database.save_user(
+            user_id,
+            name=name,
+            language_preference=language_preference,
+            schemes_checked=schemes_checked,
+            eligibility_answers=parsed_answers
+        )
+        return "Memory saved successfully."
+
+    @function_tool
+    async def forget_user_memory(self, confirm: bool = True):
+        """Use this tool to delete all saved memory for the current user if they ask you to forget them."""
+        user_id = self._get_user_id()
+        logger.info(f"Forgetting memory for user {user_id}")
+        deleted = database.forget_user(user_id)
+        if deleted:
+            return "Memory deleted successfully."
+        return "No memory found to delete."
+
+    @function_tool
+    async def end_conversation(self, confirm: bool = True):
+        """Use this tool to end the conversation and disconnect the call when the user explicitly confirms they want to end it."""
+        logger.info("Ending conversation as requested by user.")
+        import asyncio
+        if self.room:
+            asyncio.create_task(self.room.disconnect())
+        return "Ending conversation."
 
 
 server = AgentServer()
@@ -118,7 +191,7 @@ async def my_agent(ctx: JobContext):
         stt=deepgram.STT(model="nova-3", language="multi"),
         # See all available models at https://docs.livekit.io/agents/models/llm/
         llm=openai.LLM(
-            model="llama-3.1-8b-instant",
+            model="llama-3.3-70b-versatile",
             base_url="https://api.groq.com/openai/v1",
             api_key=os.environ.get("GROQ_API_KEY"),
         ),
@@ -157,7 +230,7 @@ async def my_agent(ctx: JobContext):
 
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
-        agent=Assistant(),
+        agent=Assistant(room=ctx.room),
         room=ctx.room,
     )
 

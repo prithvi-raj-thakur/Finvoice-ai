@@ -28,9 +28,18 @@ interface AppProps {
 
 export function App({ appConfig }: AppProps) {
   const tokenSource = useMemo(() => {
+    let identity = '';
+    if (typeof window !== 'undefined') {
+      identity = localStorage.getItem('finvoice_user_id') || '';
+      if (!identity) {
+        identity = `user_${Math.random().toString(36).substring(2, 15)}`;
+        localStorage.setItem('finvoice_user_id', identity);
+      }
+    }
+    
     return typeof process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT === 'string'
       ? getSandboxTokenSource(appConfig)
-      : TokenSource.endpoint('/api/token');
+      : TokenSource.endpoint(`/api/token?identity=${identity}`);
   }, [appConfig]);
 
   const session = useSession(
