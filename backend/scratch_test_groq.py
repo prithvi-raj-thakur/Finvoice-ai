@@ -1,7 +1,8 @@
+import asyncio
 import os
+
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-import asyncio
 
 load_dotenv(".env.local")
 
@@ -11,7 +12,7 @@ async def test_llm():
         base_url="https://api.groq.com/openai/v1",
         api_key=os.environ.get("GROQ_API_KEY"),
     )
-    
+
     try:
         response = await client.chat.completions.create(
             model="llama-3.1-8b-instant",

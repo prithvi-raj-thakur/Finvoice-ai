@@ -1,8 +1,8 @@
-import sqlite3
 import json
 import logging
-from datetime import datetime, timezone
 import os
+import sqlite3
+from datetime import datetime, timezone
 
 logger = logging.getLogger("database")
 
@@ -36,52 +36,52 @@ def get_user(user_id: str):
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
-    
+
     if row:
         data = dict(row)
         try:
             data['schemes_checked'] = json.loads(data['schemes_checked']) if data['schemes_checked'] else []
         except json.JSONDecodeError:
             data['schemes_checked'] = []
-            
+
         try:
             data['eligibility_answers'] = json.loads(data['eligibility_answers']) if data['eligibility_answers'] else {}
         except json.JSONDecodeError:
             data['eligibility_answers'] = {}
-            
+
         return data
     return None
 
-def save_user(user_id: str, name: str = None, language_preference: str = None, 
+def save_user(user_id: str, name: str = None, language_preference: str = None,
               schemes_checked: list = None, eligibility_answers: dict = None):
     conn = get_db()
     cursor = conn.cursor()
-    
+
     now = datetime.now(timezone.utc)
-    
+
     # Check if user exists
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
-    
+
     if row:
         existing = dict(row)
-        
+
         # Merge arrays/dicts if needed, or simply overwrite based on what is provided
         new_name = name if name is not None else existing['name']
         new_lang = language_preference if language_preference is not None else existing['language_preference']
-        
+
         # Merge schemes (avoid duplicates)
         existing_schemes = json.loads(existing['schemes_checked']) if existing['schemes_checked'] else []
         if schemes_checked:
             new_schemes = list(set(existing_schemes + schemes_checked))
         else:
             new_schemes = existing_schemes
-            
+
         # Merge answers
         existing_answers = json.loads(existing['eligibility_answers']) if existing['eligibility_answers'] else {}
         if eligibility_answers:
             existing_answers.update(eligibility_answers)
-        
+
         cursor.execute("""
             UPDATE users SET
                 name = ?,
@@ -116,7 +116,7 @@ def save_user(user_id: str, name: str = None, language_preference: str = None,
             now,
             now
         ))
-        
+
     conn.commit()
     conn.close()
     return True

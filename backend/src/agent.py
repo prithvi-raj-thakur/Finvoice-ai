@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -10,15 +11,13 @@ from livekit.agents import (
     JobContext,
     JobProcess,
     cli,
-    inference,
-    tokenize,
-    room_io,
     function_tool,
 )
-from livekit.plugins import murf, silero, google, deepgram, noise_cancellation, openai
+from livekit.plugins import deepgram, murf, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-import os
+
 import database
+import schemes_data
 
 logger = logging.getLogger("agent")
 
@@ -26,70 +25,31 @@ load_dotenv(".env.local")
 
 # Change this prompt to change what your voice agent does.
 # See README.md for example prompts (customer support, language tutor, receptionist).
-SYSTEM_PROMPT = """You are FinVoice AI, your AI financial assistant.
-Your role is to help Indian users understand personal finance through natural conversations.
+SYSTEM_PROMPT = """You are FinVoice AI, a helpful financial assistant for Indian users.
+FIRST GREETING: "Hello! I'm FinVoice AI. How can I help you today?"
+IF RETURNING USER: Call `lookup_user_memory` immediately. Greet them by name warmly.
 
-FIRST GREETING (Always start with this EXACT phrase for the first response unless you recognize a returning user):
-"Hello! I'm FinVoice AI, your AI financial assistant. I can help you understand budgeting, savings, investments, aur financial literacy. You can speak with me in English, Hindi, Bengali, Marathi, Punjabi, and many other Indian languages. How can I help you today?"
+GOVERNMENT SCHEMES:
+- When asked about schemes/eligibility, call `check_scheme_eligibility`.
+- Use memory (lookup_user_memory) before asking the user for their state/age/occupation.
+- NEVER invent schemes.
+- The tool returns a summary. Give a VERY brief 30-word spoken intro of the matches. Do NOT read the whole scheme. The UI displays the details.
 
-IF RETURNING USER: 
-When you start a conversation, immediately call `lookup_user_memory`. If the user is returning, do NOT use the standard first greeting. Instead, greet them warmly by name, in a natural conversational tone, briefly mentioning one relevant thing you remember (e.g. their language preference or a scheme they asked about), and ask how you can help them today. Do NOT dump all their database info. Make it short and friendly.
+MEMORY & CONSENT:
+- Always ask for explicit consent before using `save_user_memory`.
+- Never save OTPs, passwords, or bank numbers.
+- If asked to forget, use `forget_user_memory`.
 
-MEMORY AND CONSENT:
-- You have the ability to remember information about the user across conversations using the `save_user_memory` tool.
-- You can remember: name, language preference, schemes checked, and eligibility answers.
-- YOU MUST ALWAYS ASK FOR EXPLICIT CONSENT BEFORE SAVING NEW MEMORY. Example: "I can remember your name and language for next time. Should I save this?"
-- Only call `save_user_memory` if the user explicitly says YES or equivalent. If they say NO, do NOT save it.
-- If the user asks you to forget them, confirm the request, then call the `forget_user_memory` tool.
+IDENTITY & MULTILINGUAL:
+- Tone: Warm, professional, concise.
+- You support Hindi, Bengali, etc., but YOU MUST ALWAYS use Romanized/English script (e.g. Hinglish) for ALL languages.
+- NEVER use native scripts like Devanagari. The voice engine will crash if you do.
+- Never pretend to be human or a bank employee.
 
-IDENTITY & PERSONA:
-- You are a helpful financial mentor.
-- Tone: Warm, professional, friendly, trustworthy, patient, calm, confident, and natural.
-- NEVER pretend to be human, a bank employee, or work for RBI.
-- NEVER pretend to have access to user banking information or perform transactions.
-- Never be rude, sarcastic, shame users, or judge financial situations.
-
-LANGUAGE BEHAVIOR & WIDE MULTILINGUAL SUPPORT:
-- You are FULLY MULTILINGUAL and support a wide variety of Indian languages and regional dialects, including but not limited to English, Hindi, Bengali, Khortha, Marathi, Punjabi, Gujarati, Tamil, etc.
-- You must automatically detect and mirror the EXACT language or dialect the user is speaking.
-- ALWAYS use the native script for non-English languages (e.g., Devanagari for Hindi, Bengali script for Bengali, etc.). Do not use romanized scripts for Indian languages unless the user specifically asks you to.
-- If the user speaks Hinglish, ALWAYS start your response in English, and then include a bit of Hindi later in the sentence.
-- NEVER provide literal translations of what you just said.
-- ONLY translate explicitly if the user specifically asks you to.
-
-STYLE:
-- Responses MUST sound like spoken conversations.
-- NEVER produce long paragraphs. Maximum 2-3 short sentences per turn.
-- Avoid lists unless specifically requested. Avoid technical jargon. Explain concepts simply.
-
-CALL OBJECTIVES:
-- Improve financial literacy. Explain concepts simply. Guide toward safer financial decisions without personalized advice.
-
-KNOWLEDGE BASE:
-- Budget Planning, Savings, Emergency Funds, Mutual Funds, SIP, Fixed Deposits, Credit Score, Loans, EMI, Banking Concepts, UPI, Digital Payments, Financial Literacy, Online Fraud Awareness, Scam Prevention, Basic Tax Concepts, Personal Finance.
-- You CANNOT access: Bank balance, account info, transaction history, loan systems, real-time stock prices, NAV, government systems.
-
-GUARDRAILS & ESCALATION:
-- NEVER ask for OTP, PIN, CVV, Card Numbers, Passwords, or Security Codes. If volunteered, politely interrupt and advise them not to share sensitive info.
-- NEVER SAVE SENSITIVE INFO IN MEMORY. If the user provides an OTP, PIN, password, bank account number, card number, CVV, Aadhaar, PAN, or UPI PIN, DO NOT save it.
-- NEVER claim to approve loans, transfer money, check accounts, or verify identities.
-- INVESTMENTS: Never guarantee profits/returns or call investments risk-free. ALWAYS include: "Investment decisions involve risk. Please consult a certified financial advisor before making financial decisions."
-- LOANS: Never promise approval, rates, or eligibility. Explain concepts only.
-- FRAUD: Educate about OTP/UPI/QR scams, fake customer care, remote access scams, unknown links.
-- ESCALATION SCRIPT (For out-of-scope requests): "I'm sorry, but I can't help with account-specific or transaction-related requests. Please contact your bank's official customer support or visit your nearest branch for secure assistance."
-
-SILENCE HANDLING:
-- If user is silent for 5 seconds: "Are you still there? I'm happy to help whenever you're ready."
-- If silence continues: "No worries. Feel free to come back anytime. Have a wonderful day."
-
-MEMORY LIMITATIONS (CRITICAL):
-- You ONLY remember the specific data returned by the `lookup_user_memory` tool (e.g., name, schemes). 
-- You DO NOT remember the exact chat history, transcripts, or "the last question" asked from previous calls. 
-- If the user asks "What was my last question?" and you don't actually know it, do NOT guess or hallucinate. Politely admit that you only save their core profile/preferences, not the full chat history.
-
-ENDING CONVERSATIONS:
-- If the user says "thanks", "bye", or indicates they want to leave, DO NOT automatically end the call. First, you MUST ask: "Would you like me to end this conversation?"
-- If the user confirms (e.g. "Yes", "End it"), you MUST call the `end_conversation` tool to hang up automatically. Feel free to say a quick "Goodbye!" before calling the tool.
+RULES:
+- Maximum 2-3 short sentences per turn.
+- NEVER ask for sensitive info (OTP, passwords, card numbers).
+- If the user says "bye" or "end", ask to confirm, then call `end_conversation`.
 """
 
 
@@ -117,10 +77,10 @@ class Assistant(Agent):
 
     @function_tool
     async def save_user_memory(
-        self, 
-        name: Optional[str] = None, 
-        language_preference: Optional[str] = None, 
-        schemes_checked: Optional[list[str]] = None, 
+        self,
+        name: Optional[str] = None,
+        language_preference: Optional[str] = None,
+        schemes_checked: Optional[list[str]] = None,
         eligibility_answers: Optional[str] = None
     ):
         """Use this tool to save memory about the user. You MUST ask for explicit consent before calling this tool. NEVER save sensitive info like OTP or PAN.
@@ -128,7 +88,7 @@ class Assistant(Agent):
         """
         user_id = self._get_user_id()
         logger.info(f"Saving memory for user {user_id}")
-        
+
         parsed_answers = None
         if eligibility_answers:
             import json
@@ -136,7 +96,7 @@ class Assistant(Agent):
                 parsed_answers = json.loads(eligibility_answers)
             except json.JSONDecodeError:
                 logger.warning("Failed to parse eligibility_answers JSON")
-        
+
         database.save_user(
             user_id,
             name=name,
@@ -164,6 +124,45 @@ class Assistant(Agent):
         if self.room:
             asyncio.create_task(self.room.disconnect())
         return "Ending conversation."
+
+    @function_tool
+    async def check_scheme_eligibility(
+        self,
+        state: Optional[str] = None,
+        occupation: Optional[str] = None,
+        age: Optional[int] = None,
+        gender: Optional[str] = None
+    ):
+        """Use this tool to determine which government financial schemes the user may be eligible for based on their circumstances.
+        CALL THIS TOOL when:
+        - the user asks whether they qualify for government financial schemes
+        - the user asks which government schemes are suitable for them
+        - the user wants an eligibility check
+        - the user asks about scheme benefits based on their circumstances
+        DO NOT call this tool for general questions or investment advice.
+        If required information is missing, ask the user for the minimum necessary information before calling this.
+        USE SAVED MEMORY (lookup_user_memory) if available to avoid asking the user for information they already provided.
+        """
+        logger.info(f"Checking scheme eligibility: state={state}, occupation={occupation}, age={age}, gender={gender}")
+        try:
+            results = schemes_data.search_schemes(state=state, occupation=occupation, age=age, gender=gender)
+
+            # Send results to frontend via data channel
+            if self.room and self.room.local_participant:
+                import json
+                payload = json.dumps({
+                    "type": "scheme_results",
+                    "data": results
+                }).encode('utf-8')
+                await self.room.local_participant.publish_data(payload)
+
+            # Return a tiny summary to the LLM so it doesn't bloat the context window
+            scheme_count = len(results.get("schemes", []))
+            scheme_names = ", ".join([s["name"] for s in results.get("schemes", [])])
+            return f"Found {scheme_count} schemes: {scheme_names}. The UI has been updated with full details. Tell the user you found these matches and give a VERY brief 30-word intro overall without explaining each one fully yet. Wait for them to ask for more details."
+        except Exception as e:
+            logger.error(f"Error checking schemes: {e}")
+            return {"success": False, "error": "Service temporarily unavailable"}
 
 
 server = AgentServer()
@@ -198,16 +197,14 @@ async def my_agent(ctx: JobContext):
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
         tts=murf.TTS(
-            voice="Anisha", 
+            voice="Anisha",
             style="Conversation",
         ),
         # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
         # See more at https://docs.livekit.io/agents/build/turns
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        # allow the LLM to generate a response while waiting for the end of turn
-        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
-        preemptive_generation=True,
+        preemptive_generation=False,
     )
 
     # To use a realtime model instead of a voice pipeline, use the following session setup instead.

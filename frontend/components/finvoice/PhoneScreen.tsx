@@ -7,8 +7,9 @@ import {
   useSessionContext,
   useLocalParticipant,
   useSessionMessages,
+  useRoomContext,
 } from '@livekit/components-react';
-import { Track } from 'livekit-client';
+import { Track, RoomEvent } from 'livekit-client';
 import type { AgentState } from '@livekit/components-react';
 import { cn } from '@/lib/shadcn/utils';
 import type { VisualizerType } from './VisualizerSwitcher';
@@ -103,18 +104,37 @@ export function PhoneScreen({
   className,
 }: PhoneScreenProps) {
   const session = useSessionContext();
+  const room = useRoomContext();
   const { state: agentState, audioTrack: agentAudioTrack } =
     useVoiceAssistant();
   const { localParticipant } = useLocalParticipant();
   const { messages: chatMessages } = useSessionMessages(session);
 
   const [hasConnectedOnce, setHasConnectedOnce] = React.useState(false);
+  const [schemeData, setSchemeData] = React.useState<any>(null);
 
   React.useEffect(() => {
     if (session.isConnected) {
       setHasConnectedOnce(true);
     }
   }, [session.isConnected]);
+
+  React.useEffect(() => {
+    if (!room) return;
+    const handleData = (payload: Uint8Array, participant: any, kind: any, topic: any) => {
+      try {
+        const text = new TextDecoder().decode(payload);
+        const data = JSON.parse(text);
+        if (data.type === 'scheme_results') {
+          setSchemeData(data.data);
+        }
+      } catch (e) {
+        console.error("Failed to parse data message", e);
+      }
+    };
+    room.on(RoomEvent.DataReceived, handleData);
+    return () => { room.off(RoomEvent.DataReceived, handleData); };
+  }, [room]);
 
   const hasEnded = hasConnectedOnce && !session.isConnected;
 
@@ -200,6 +220,73 @@ export function PhoneScreen({
                   {stateConfig.subtitle}
                 </motion.p>
               )}
+
+              {/* Scheme Card Overlay */}
+              <AnimatePresence>
+                {schemeData && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                    className="absolute inset-x-4 top-20 bottom-24 bg-[#050507]/90 backdrop-blur-xl border border-white/[0.1] rounded-2xl p-5 z-50 flex flex-col shadow-2xl overflow-y-auto"
+                  >
+                    <div className="flex items-center justify-between mb-4 shrink-0">
+                      <div className="flex items-center gap-2">
+                        <div className="size-7 rounded-full bg-indigo-500/20 flex items-center justify-center">
+                          <svg className="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        </div>
+                        <span className="text-[13px] font-semibold text-[#F5F5F7] tracking-wide uppercase">Government Scheme Match</span>
+                      </div>
+                      <button onClick={() => setSchemeData(null)} className="p-1 rounded-full hover:bg-white/[0.1] transition-colors">
+                        <svg className="w-4 h-4 text-[#8A8A94]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                    
+                    {schemeData.schemes && schemeData.schemes.length > 0 ? (
+                      <div className="flex flex-col gap-6">
+                        {schemeData.schemes.map((scheme: any, idx: number) => (
+                          <div key={idx} className="flex flex-col gap-4 border-b border-white/[0.06] pb-6 last:border-0 last:pb-0">
+                            <h3 className="text-[16px] font-medium text-white leading-tight">{scheme.name}</h3>
+                            
+                            <div className="space-y-1">
+                              <span className="text-[10px] text-indigo-400 uppercase tracking-wider font-semibold">Why it may be relevant</span>
+                              <p className="text-[12px] text-[#8A8A94] leading-relaxed">{scheme.why_relevant}</p>
+                            </div>
+                            
+                            <div className="space-y-1">
+                              <span className="text-[10px] text-indigo-400 uppercase tracking-wider font-semibold">Benefits</span>
+                              <p className="text-[12px] text-[#F5F5F7] leading-relaxed">{scheme.benefits}</p>
+                            </div>
+                            
+                            <div className="space-y-1">
+                              <span className="text-[10px] text-indigo-400 uppercase tracking-wider font-semibold">Required Documents</span>
+                              <ul className="list-disc pl-4 text-[12px] text-[#8A8A94]">
+                                {scheme.documents.map((doc: string, i: number) => (
+                                  <li key={i}>{doc}</li>
+                                ))}
+                              </ul>
+                            </div>
+                            
+                            <div className="mt-2 pt-3 border-t border-white/[0.06] flex items-center justify-between text-[10px] text-[#8A8A94]">
+                               <span>Source: {scheme.source}</span>
+                               <span>Updated: {scheme.last_updated}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex-1 flex flex-col items-center justify-center text-center gap-2">
+                        <span className="text-[14px] font-medium text-white">No matches found</span>
+                        <p className="text-[12px] text-[#8A8A94] leading-relaxed">Could not find a specific government scheme in the active dataset matching your criteria.</p>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               {/* Visualizer */}
               {!hasEnded && (

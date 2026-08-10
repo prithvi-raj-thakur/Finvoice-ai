@@ -1,8 +1,8 @@
-import os
 import asyncio
+
 from dotenv import load_dotenv
-from livekit.plugins import google
 from livekit.agents import llm
+from livekit.plugins import google
 
 load_dotenv('.env.local')
 

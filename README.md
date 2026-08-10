@@ -122,6 +122,22 @@ You should now see the voice agent UI. Click **Start talking**, allow microphone
 
 ---
 
+## Day 5 — Tools
+
+**Tool:** `check_scheme_eligibility`
+**Purpose:** Government financial scheme eligibility lookup.
+**Data Source:** LOCAL DATASET (Curated real government schemes to ensure reliability without requiring external API registration/auth).
+
+### Documentation
+
+- **Tool Input:** Accepts structured JSON containing parameters like `state`, `occupation`, `age`, and `gender`. Uses existing user memory when possible.
+- **Tool Output:** Returns a structured list of potentially matching schemes (e.g., PM-KISAN, Sukanya Samriddhi Yojana, Atal Pension Yojana). Includes scheme name, relevance reason, benefits, required documents, source, and last updated date.
+- **Data Freshness:** Every result includes a `last_updated` date for the specific scheme data, and a `checked_at` timestamp indicating when the search was performed.
+- **Failure Behavior:** If no matches are found, gracefully informs the user. If the service errors, returns a safe error indicating temporary unavailability without hallucinating.
+- **Safety Limitations:** Never requests sensitive financial credentials (OTP, PIN, passwords, Aadhaar, PAN) for checking schemes. Never promises approval, adding a disclaimer that final decisions are made by government authorities.
+
+---
+
 ## Deploy
 
 Want to deploy this beyond localhost? You'll need to deploy **two services**: the backend agent and the frontend. Both must use the same LiveKit project.

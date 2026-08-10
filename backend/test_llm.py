@@ -1,9 +1,11 @@
 import asyncio
-import os
+
 from dotenv import load_dotenv
+
 load_dotenv('.env.local')
-from livekit.plugins import google
 from livekit.agents.llm import ChatContext
+from livekit.plugins import google
+
 
 async def main():
     llm = google.LLM(model='gemini-2.0-flash')
