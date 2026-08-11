@@ -25,7 +25,28 @@ def init_db():
                 eligibility_answers TEXT,
                 last_interaction TIMESTAMP,
                 created_at TIMESTAMP,
-                updated_at TIMESTAMP
+                updated_at TIMESTAMP,
+                outbound_opt_out BOOLEAN DEFAULT 0
+            )
+        """)
+        
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN outbound_opt_out BOOLEAN DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass # Column already exists
+        
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS outbound_calls (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                phone_number TEXT,
+                reason TEXT,
+                scheme_id TEXT,
+                status TEXT,
+                created_at TIMESTAMP,
+                answered_at TIMESTAMP,
+                ended_at TIMESTAMP,
+                retry_count INTEGER DEFAULT 0
             )
         """)
     conn.close()
@@ -129,6 +150,53 @@ def forget_user(user_id: str):
     conn.commit()
     conn.close()
     return deleted
+
+def set_opt_out(user_id: str, opt_out: bool = True):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET outbound_opt_out = ? WHERE user_id = ?", (1 if opt_out else 0, user_id))
+    conn.commit()
+    conn.close()
+
+def create_outbound_call(call_id: str, user_id: str, phone_number: str, reason: str, scheme_id: str = None):
+    conn = get_db()
+    cursor = conn.cursor()
+    now = datetime.now(timezone.utc)
+    cursor.execute("""
+        INSERT INTO outbound_calls (id, user_id, phone_number, reason, scheme_id, status, created_at, retry_count)
+        VALUES (?, ?, ?, ?, ?, 'initiated', ?, 0)
+    """, (call_id, user_id, phone_number, reason, scheme_id, now))
+    conn.commit()
+    conn.close()
+
+def update_outbound_call_status(call_id: str, status: str):
+    conn = get_db()
+    cursor = conn.cursor()
+    now = datetime.now(timezone.utc)
+    
+    updates = ["status = ?"]
+    params = [status]
+    
+    if status in ['answered', 'connected']:
+        updates.append("answered_at = ?")
+        params.append(now)
+    elif status in ['completed', 'no_answer', 'busy', 'voicemail', 'failed', 'opted_out']:
+        updates.append("ended_at = ?")
+        params.append(now)
+        
+    params.append(call_id)
+    
+    cursor.execute(f"UPDATE outbound_calls SET {', '.join(updates)} WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+
+def get_outbound_calls():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM outbound_calls ORDER BY created_at DESC LIMIT 50")
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 # Initialize DB on import
 init_db()

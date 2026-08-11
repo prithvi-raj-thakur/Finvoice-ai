@@ -6,6 +6,7 @@ import {
   useVoiceAssistant,
   useSessionContext,
   useLocalParticipant,
+  useRemoteParticipants,
   useSessionMessages,
   useRoomContext,
 } from '@livekit/components-react';
@@ -105,13 +106,116 @@ export function PhoneScreen({
 }: PhoneScreenProps) {
   const session = useSessionContext();
   const room = useRoomContext();
-  const { state: agentState, audioTrack: agentAudioTrack } =
+  const { state: agentState, audioTrack: agentAudioTrack, agent } =
     useVoiceAssistant();
   const { localParticipant } = useLocalParticipant();
+  const remoteParticipants = useRemoteParticipants();
   const { messages: chatMessages } = useSessionMessages(session);
+
+  // Phone participant (remote participant that is NOT the agent)
+  const phoneParticipant = remoteParticipants.find(p => p.identity !== agent?.identity && !p.name?.toLowerCase().includes('agent'));
+  const phoneMicTrack = phoneParticipant?.getTrackPublication(Track.Source.Microphone)?.track;
+  const phoneIsSpeaking = phoneParticipant?.isSpeaking;
 
   const [hasConnectedOnce, setHasConnectedOnce] = React.useState(false);
   const [schemeData, setSchemeData] = React.useState<any>(null);
+
+  const [outboundStatus, setOutboundStatus] = React.useState<'setup' | 'calling' | 'ringing' | 'connected' | 'completed' | 'failed' | 'no_answer'>('setup');
+  const [outboundName, setOutboundName] = React.useState('Rahul');
+  const [outboundPhone, setOutboundPhone] = React.useState('');
+  const [outboundReason, setOutboundReason] = React.useState('Scheme Follow-up');
+  const [outboundCallId, setOutboundCallId] = React.useState<string | null>(null);
+  const [outboundDuration, setOutboundDuration] = React.useState(0);
+  const [outboundHovered, setOutboundHovered] = React.useState(false);
+
+  // Timer for outbound call
+  React.useEffect(() => {
+    let interval: any;
+    if (outboundStatus === 'connected') {
+      interval = setInterval(() => {
+        setOutboundDuration((prev) => prev + 1);
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [outboundStatus]);
+
+  // Mute website when in outbound mode so call is only executed on phone
+  React.useEffect(() => {
+    if (viewMode !== 'outbound') {
+      document.querySelectorAll('audio, video').forEach((a: any) => { a.muted = false; a.volume = 1; });
+      return;
+    }
+
+    // Force disable local microphone
+    if (localParticipant && localParticipant.isMicrophoneEnabled) {
+      localParticipant.setMicrophoneEnabled(false);
+    }
+
+    const muteAll = () => {
+      document.querySelectorAll('audio, video').forEach((el: any) => {
+        el.muted = true;
+        el.volume = 0;
+      });
+    };
+
+    muteAll();
+
+    // Use MutationObserver to instantly mute any new audio elements LiveKit injects
+    const observer = new MutationObserver(() => {
+      muteAll();
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    return () => observer.disconnect();
+  }, [viewMode, localParticipant, remoteParticipants]);
+
+  const handleStartOutbound = async () => {
+    if (!outboundPhone || outboundPhone.length < 10) return alert("Enter valid phone number");
+    setOutboundStatus('calling');
+    try {
+      const generatedUserId = outboundName.toLowerCase().replace(/\s+/g, '-') + '-' + Math.floor(Math.random() * 1000);
+      
+      const res = await fetch('http://localhost:8000/api/outbound-call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone_number: outboundPhone,
+          user_id: generatedUserId,
+          reason: outboundReason,
+          room_name: room?.name,
+        }),
+      });
+      if (!res.ok) throw new Error('Call failed to initiate');
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed');
+      
+      const callId = data.call_id;
+      setOutboundCallId(callId);
+      pollOutboundStatus(callId);
+    } catch (e) {
+      console.error(e);
+      setOutboundStatus('failed');
+    }
+  };
+
+  const pollOutboundStatus = (callId: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch('http://localhost:8000/api/outbound-calls');
+        const data = await res.json();
+        const call = data.calls.find((c: any) => c.id === callId);
+        if (call) {
+          setOutboundStatus(call.status);
+          if (['completed', 'failed', 'no_answer', 'busy', 'opted_out'].includes(call.status)) {
+            clearInterval(interval);
+          }
+        }
+      } catch (e) {
+        console.error("Error polling status", e);
+      }
+    }, 2000);
+  };
 
   React.useEffect(() => {
     if (session.isConnected) {
@@ -144,8 +248,19 @@ export function PhoneScreen({
   const isSpeaking = agentState === 'speaking';
   const isListening = agentState === 'listening';
 
-  // Reactive audio track: user mic when listening, agent when speaking
-  const activeTrack = isSpeaking ? agentAudioTrack : localMicrophoneTrack;
+  // In outbound mode, the active track is the agent's if speaking, otherwise the phone user's!
+  // In inbound mode, it's the agent's if speaking, otherwise the local microphone.
+  const activeTrack = viewMode === 'outbound'
+    ? (isSpeaking ? agentAudioTrack : phoneMicTrack)
+    : (isSpeaking ? agentAudioTrack : localMicrophoneTrack);
+
+  // Determine active speaker label for outbound
+  let outboundSpeakerLabel = '';
+  if (viewMode === 'outbound') {
+    if (isSpeaking) outboundSpeakerLabel = 'FinVoice Speaking';
+    else if (phoneIsSpeaking) outboundSpeakerLabel = 'User Speaking';
+    else outboundSpeakerLabel = 'Listening...';
+  }
 
   const stateConfig = getStateConfig(agentState, {
     isConnected: session.isConnected,
@@ -153,10 +268,17 @@ export function PhoneScreen({
   });
 
   const accentColor = useMemo<`#${string}`>(() => {
+    if (viewMode === 'outbound' && phoneIsSpeaking && !isSpeaking) return '#10B981'; // Green for phone user
     if (isSpeaking) return '#8B5CF6';
     if (isListening) return '#38BDF8';
     return '#6366F1';
-  }, [isSpeaking, isListening]);
+  }, [isSpeaking, isListening, viewMode, phoneIsSpeaking]);
+
+  const formatDuration = (seconds: number) => {
+    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const s = (seconds % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
 
   return (
     <div
@@ -193,7 +315,138 @@ export function PhoneScreen({
       {/* ─── Main Content ─── */}
       <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden">
         <AnimatePresence mode="wait">
-          {viewMode === 'voice' ? (
+          {viewMode === 'outbound' ? (
+            <motion.div
+              key="outbound-view"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+              className="flex flex-col items-center justify-center w-full h-full px-4 relative"
+            >
+              {outboundStatus === 'setup' ? (
+                <div className="w-full max-w-[260px] flex flex-col bg-[#111115]/80 backdrop-blur-xl border border-white/10 rounded-3xl p-6 shadow-2xl relative">
+                  <div className="text-center mb-6">
+                    <h2 className="text-[15px] font-semibold text-white tracking-tight">Outbound Call</h2>
+                    <p className="text-[10px] text-white/50 mt-1">Select recipient</p>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="space-y-1.5">
+                      <label className="text-[9px] font-semibold text-white/60 uppercase tracking-wider pl-1">Recipient Name</label>
+                      <input 
+                        type="text"
+                        value={outboundName}
+                        onChange={(e) => setOutboundName(e.target.value)}
+                        placeholder="e.g. Rahul"
+                        suppressHydrationWarning
+                        className="w-full bg-white/5 border border-white/10 rounded-xl py-2 px-3 text-[12px] text-white placeholder:text-white/20 focus:outline-none focus:border-[#10B981]/50 focus:bg-white/10 transition-all"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[9px] font-semibold text-white/60 uppercase tracking-wider pl-1">Phone Number</label>
+                      <input 
+                        type="tel"
+                        value={outboundPhone}
+                        onChange={(e) => setOutboundPhone(e.target.value)}
+                        placeholder="+91 XXXXX XXXXX"
+                        suppressHydrationWarning
+                        className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 px-3 text-[12px] text-white placeholder:text-white/20 focus:outline-none focus:border-[#10B981]/50 focus:bg-white/10 transition-all"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[9px] font-semibold text-white/60 uppercase tracking-wider pl-1">Reason</label>
+                      <select 
+                        value={outboundReason}
+                        onChange={(e) => setOutboundReason(e.target.value)}
+                        suppressHydrationWarning
+                        className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 px-3 text-[12px] text-white appearance-none focus:outline-none focus:border-[#10B981]/50 focus:bg-white/10 transition-all cursor-pointer"
+                      >
+                        <option value="Scheme Follow-up" className="bg-[#111115]">Scheme Follow-up</option>
+                        <option value="Application Deadline" className="bg-[#111115]">Application Deadline</option>
+                      </select>
+                    </div>
+
+                    <button
+                      onClick={handleStartOutbound}
+                      onMouseEnter={() => setOutboundHovered(true)}
+                      onMouseLeave={() => setOutboundHovered(false)}
+                      suppressHydrationWarning
+                      className="w-full py-3 rounded-xl font-semibold text-[12px] bg-white text-black hover:bg-gray-100 flex items-center justify-center gap-2 transition-all mt-2"
+                      style={{ boxShadow: outboundHovered ? '0 0 15px rgba(255,255,255,0.2)' : 'none' }}
+                    >
+                      CALL USER
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center relative">
+                   {/* Live Call Header */}
+                   <div className="absolute top-4 left-0 right-0 flex flex-col items-center">
+                      <span className="text-[15px] font-semibold text-white tracking-tight">{outboundName || 'Unknown User'}</span>
+                      <span className="text-[9px] text-[#10B981] font-semibold uppercase tracking-widest mt-1">Live Call</span>
+                      
+                      <div className="flex items-center justify-center gap-2 mt-2 px-3 py-1 rounded-full bg-white/[0.04] border border-white/[0.06]">
+                         {outboundStatus === 'connected' ? <div className="size-1.5 bg-[#10B981] rounded-full animate-pulse" /> : null}
+                         <span className="text-[10px] font-medium text-white/80 uppercase tracking-wider">
+                           {outboundStatus.replace('_', ' ')}
+                         </span>
+                         {outboundStatus === 'connected' && (
+                           <>
+                             <div className="w-px h-3 bg-white/20 mx-1" />
+                             <span className="text-[10px] font-medium text-white font-mono tracking-wider">{formatDuration(outboundDuration)}</span>
+                           </>
+                         )}
+                      </div>
+                   </div>
+
+                   {/* Main Display Area */}
+                   {outboundStatus === 'completed' || outboundStatus === 'failed' || outboundStatus === 'no_answer' || outboundStatus === 'opted_out' ? (
+                     <div className="flex flex-col items-center gap-4 text-center">
+                       <div className="size-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center mb-2">
+                          <svg className="w-5 h-5 text-[#8A8A94]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                          </svg>
+                       </div>
+                       <h3 className="text-[14px] font-semibold text-white uppercase tracking-widest">Call {outboundStatus.replace('_', ' ')}</h3>
+                       {outboundStatus === 'completed' && <span className="text-[11px] text-[#8A8A94]">Duration: {formatDuration(outboundDuration)}</span>}
+                       <span className="text-[10px] text-[#8A8A94]">Conversation saved</span>
+                       <button onClick={() => {
+                         setOutboundStatus('setup');
+                         setOutboundDuration(0);
+                       }} className="mt-4 px-6 py-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-[11px] font-medium transition-colors">
+                         Call Again
+                       </button>
+                     </div>
+                   ) : (
+                     <div className="flex flex-col items-center justify-center gap-6">
+                       <div className="relative flex items-center justify-center">
+                         <motion.div
+                           animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0.8, 0.5] }}
+                           transition={{ repeat: Infinity, duration: 2 }}
+                           className="absolute inset-0 rounded-full bg-[#10B981] blur-xl"
+                         />
+                         <div className="relative size-24 rounded-full bg-[#10B981]/20 border border-[#10B981]/40 flex items-center justify-center">
+                           <svg className="w-8 h-8 text-[#10B981]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                             <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
+                           </svg>
+                         </div>
+                       </div>
+                       <div className="text-center">
+                         <h3 className="text-[16px] font-semibold text-white tracking-wide">Call Initiated</h3>
+                         <p className="text-[12px] text-[#8A8A94] mt-2 max-w-[200px] leading-relaxed">
+                           FinVoice is currently speaking with the user on their phone.
+                         </p>
+                       </div>
+                     </div>
+                   )}
+                </div>
+              )}
+            </motion.div>
+          ) : viewMode === 'voice' ? (
             <motion.div
               key="voice-view"
               initial={{ opacity: 0, scale: 0.95 }}

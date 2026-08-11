@@ -48,7 +48,7 @@ export async function POST(req: Request) {
     const url = new URL(req.url);
     const participantName = url.searchParams.get('name') || 'user';
     const participantIdentity = url.searchParams.get('identity') || `voice_assistant_user_${Math.floor(Math.random() * 10_000)}`;
-    const roomName = `voice_assistant_room_${Math.floor(Math.random() * 10_000)}`;
+    const roomName = url.searchParams.get('room') || `voice_assistant_room_${Math.floor(Math.random() * 10_000)}`;
 
     const participantToken = await createParticipantToken(
       { identity: participantIdentity, name: participantName },

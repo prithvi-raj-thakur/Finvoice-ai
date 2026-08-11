@@ -1,3 +1,8 @@
+import sys
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 import logging
 import os
 from typing import Optional
@@ -12,8 +17,9 @@ from livekit.agents import (
     JobProcess,
     cli,
     function_tool,
+    room_io,
 )
-from livekit.plugins import deepgram, murf, openai, silero
+from livekit.plugins import deepgram, murf, openai, google, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 import database
@@ -23,35 +29,29 @@ logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
 
-# Change this prompt to change what your voice agent does.
-# See README.md for example prompts (customer support, language tutor, receptionist).
-SYSTEM_PROMPT = """You are FinVoice AI, a helpful financial assistant for Indian users.
-FIRST GREETING: "Hello! I'm FinVoice AI. How can I help you today?"
-IF RETURNING USER: Call `lookup_user_memory` immediately. Greet them by name warmly.
+SYSTEM_PROMPT = """
+You are Anisha, an AI from FinVoice. You are proactively calling the user (Rahul) regarding a scheme deadline.
+You are having a spoken conversation over a phone call. NEVER output code, JSON, markdown, or mathematical terms. Respond with natural conversational English ONLY.
 
-GOVERNMENT SCHEMES:
-- When asked about schemes/eligibility, call `check_scheme_eligibility`.
-- Use memory (lookup_user_memory) before asking the user for their state/age/occupation.
-- NEVER invent schemes.
-- The tool returns a summary. Give a VERY brief 30-word spoken intro of the matches. Do NOT read the whole scheme. The UI displays the details.
+CONTEXT (Act as if you know this):
+- User: Rahul
+- Scheme: PM Vishwakarma Yojana (or Mudra Yojana)
+- Deadline: The application deadline is approaching in 3 days.
+- What to do: To complete the application before the deadline, Rahul needs to submit his Aadhaar card and Income Certificate at his nearest CSC (Common Service Centre) or bank branch.
 
-MEMORY & CONSENT:
-- Always ask for explicit consent before using `save_user_memory`.
-- Never save OTPs, passwords, or bank numbers.
-- If asked to forget, use `forget_user_memory`.
+OTP & SECURITY RULES (CRITICAL):
+- You MUST NEVER collect or handle OTPs, passwords, PINs, or banking credentials.
+- If the user asks you to take an OTP or complete the application for them, YOU MUST REFUSE and say exactly something like: "I can't collect or handle OTPs or banking credentials. I can explain the application steps, but you'll need to complete the secure part yourself."
 
-IDENTITY & MULTILINGUAL:
-- Tone: Warm, professional, concise.
-- You support Hindi, Bengali, etc., but YOU MUST ALWAYS use Romanized/English script (e.g. Hinglish) for ALL languages.
-- NEVER use native scripts like Devanagari. The voice engine will crash if you do.
-- Never pretend to be human or a bank employee.
+OPT-OUT & END CALL:
+- If the user says "stop", "don't call me", or asks to opt out, apologize briefly and call `end_conversation`.
+- If the user says "bye", call `end_conversation`.
 
-RULES:
-- Maximum 2-3 short sentences per turn.
-- NEVER ask for sensitive info (OTP, passwords, card numbers).
-- If the user says "bye" or "end", ask to confirm, then call `end_conversation`.
+IDENTITY:
+- Tone: Professional, warm, concise. 
+- You support Hinglish/English.
+- Maximum 1-2 short sentences per response. Keep it very conversational.
 """
-
 
 class Assistant(Agent):
     def __init__(self, room: rtc.Room = None) -> None:
@@ -187,7 +187,7 @@ async def my_agent(ctx: JobContext):
     session = AgentSession(
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         # See all available models at https://docs.livekit.io/agents/models/stt/
-        stt=deepgram.STT(model="nova-3", language="multi"),
+        stt=deepgram.STT(model="nova-2-general", language="en-IN"),
         # See all available models at https://docs.livekit.io/agents/models/llm/
         llm=openai.LLM(
             model="llama-3.3-70b-versatile",
@@ -229,10 +229,29 @@ async def my_agent(ctx: JobContext):
     await session.start(
         agent=Assistant(room=ctx.room),
         room=ctx.room,
+        room_input_options=room_io.RoomInputOptions(
+            participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_SIP]
+        )
     )
 
+    @ctx.room.on("participant_connected")
+    def on_participant_connected(participant: rtc.RemoteParticipant):
+        logger.info(f"Participant connected: {participant.identity}")
+        # If it's a SIP participant (Twilio), trigger the outbound greeting immediately
+        if (participant.identity and participant.identity.startswith("sip")) or getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+            greeting = "Hi Rahul, this is Anisha calling from FinVoice. I'm calling because a government scheme you previously checked has an approaching application deadline. If you don't want these calls, just say stop and I won't call you again."
+            session.say(greeting, add_to_chat_ctx=True)
+            
     # Join the room and connect to the user
     await ctx.connect()
+    
+    # Greet any SIP participants already in the room
+    for participant in ctx.room.remote_participants.values():
+        if (participant.identity and participant.identity.startswith("sip")) or getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+            logger.info("SIP Participant already in room! Triggering outbound greeting...")
+            greeting = "Hi Rahul, this is Anisha calling from FinVoice. I'm calling because a government scheme you previously checked has an approaching application deadline. If you don't want these calls, just say stop and I won't call you again."
+            session.say(greeting, add_to_chat_ctx=True)
+            break
 
 
 if __name__ == "__main__":

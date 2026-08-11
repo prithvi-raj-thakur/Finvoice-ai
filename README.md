@@ -138,6 +138,55 @@ You should now see the voice agent UI. Click **Start talking**, allow microphone
 
 ---
 
+## Day 6 — Outbound Voice Calls
+
+**Feature:** Proactive Outbound Calling
+**Use Case:** Financial Services often need to follow up with users regarding upcoming deadlines, application status updates, or new government schemes matching their profile. Waiting for the user to initiate contact is often insufficient.
+
+### Architecture
+- **Twilio Integration:** Uses the Twilio Python SDK to initiate an outbound call.
+- **LiveKit SIP Ingress:** Twilio's webhook connects the answered call directly to the LiveKit project via `TwiML` `<Dial><Sip>`.
+- **LiveKit Agent Dispatch:** The Python backend dynamically dispatches the voice agent into the SIP room and injects the context (e.g. user details and reason for the call) into the LLM system prompt.
+- **Service:** A new dedicated FastAPI service (`backend/src/outbound_call_service.py`) handles the Twilio webhook lifecycle.
+
+### Environment Variables
+Ensure these are set in `backend/.env.local`:
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_PHONE_NUMBER`
+- `PUBLIC_BASE_URL` (Your ngrok/public URL for Twilio to reach your local FastAPI server)
+- `LIVEKIT_SIP_DOMAIN` (Your LiveKit Cloud SIP domain, e.g. `your-project.sip.livekit.cloud`)
+
+### Webhook & Twilio Configuration Requirements
+For outbound calling to work:
+1. You must have a verified Twilio number capable of making outbound calls.
+2. For local testing, you must expose port 8000 using a secure tunnel (e.g., ngrok `ngrok http 8000`) and set `PUBLIC_BASE_URL` to your ngrok URL.
+3. You must configure **SIP Ingress** in LiveKit Cloud so that Twilio can reach LiveKit using `<Dial><Sip>`.
+
+### User Consent & Opt-Out Behavior
+- **Explicit Identity:** FinVoice immediately identifies itself as an automated service and explains the reason for the call.
+- **Opt-Out (Stop):** The user is instructed that they can say "stop" at any time. If the user expresses a desire to stop receiving calls, the LLM calls the `opt_out_outbound_calls` tool. This tool ends the call and marks `outbound_opt_out = true` in the SQLite memory database. Future outbound calls to this user are blocked at the API level.
+
+### Retry Policy & Call Statuses
+- Call states (`initiated`, `ringing`, `answered`, `connected`, `completed`, `no_answer`, `busy`, `failed`, `opted_out`) are tracked in SQLite via Twilio status callbacks.
+- **Retry Strategy:** The system currently initiates one call at a time. If the call status is `no_answer` or `busy`, manual or cron-based retries can be configured (maximum 1 retry after delay). If the call is an immediate hang-up or opted-out, it is never retried.
+
+### Sensitive Data Policy
+- The system is instructed **never** to ask for OTP, PIN, CVV, passwords, Aadhaar, PAN, or any banking credentials over the phone.
+- If the user volunteers sensitive information, the AI politely interrupts and refuses to process or store the data.
+
+### How to Test
+1. Set up your environment variables as described above.
+2. Start the backend and frontend (`.\start_app.ps1` or `./start_app.sh`). Ensure your ngrok tunnel is pointing to `http://localhost:8000`.
+3. Open the UI. On the main page, find the **Outbound Calls** section.
+4. Enter a phone number you control in E.164 format (e.g. `+919876543210`).
+5. Select a reminder scenario and click **Call Now**.
+6. Answer your phone. The agent will greet you and explain the context. Test the opt-out by saying "Stop calling me".
+
+**IMPORTANT**: Demo calls are made only to numbers controlled by the tester or used with permission. Unsolicited bulk dialing is strictly prohibited.
+
+---
+
 ## Deploy
 
 Want to deploy this beyond localhost? You'll need to deploy **two services**: the backend agent and the frontend. Both must use the same LiveKit project.
