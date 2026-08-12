@@ -1,6 +1,7 @@
 import os
-from twilio.rest import Client
+
 from dotenv import load_dotenv
+from twilio.rest import Client
 
 load_dotenv(".env.local")
 client = Client(os.environ.get("TWILIO_ACCOUNT_SID"), os.environ.get("TWILIO_AUTH_TOKEN"))

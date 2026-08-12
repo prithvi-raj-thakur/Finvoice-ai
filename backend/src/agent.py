@@ -1,4 +1,5 @@
 import sys
+
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
@@ -17,9 +18,8 @@ from livekit.agents import (
     JobProcess,
     cli,
     function_tool,
-    room_io,
 )
-from livekit.plugins import deepgram, murf, openai, google, silero
+from livekit.plugins import deepgram, murf, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 import database
@@ -30,27 +30,33 @@ logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
 SYSTEM_PROMPT = """
-You are Anisha, an AI from FinVoice. You are proactively calling the user (Rahul) regarding a scheme deadline.
-You are having a spoken conversation over a phone call. NEVER output code, JSON, markdown, or mathematical terms. Respond with natural conversational English ONLY.
-
-CONTEXT (Act as if you know this):
-- User: Rahul
-- Scheme: PM Vishwakarma Yojana (or Mudra Yojana)
-- Deadline: The application deadline is approaching in 3 days.
-- What to do: To complete the application before the deadline, Rahul needs to submit his Aadhaar card and Income Certificate at his nearest CSC (Common Service Centre) or bank branch.
+You are Anisha, an AI from FinVoice.
+You are a helpful, professional, and knowledgeable financial assistant.
+NEVER output code, JSON, markdown, or mathematical terms. Respond with natural conversational English ONLY.
 
 OTP & SECURITY RULES (CRITICAL):
 - You MUST NEVER collect or handle OTPs, passwords, PINs, or banking credentials.
-- If the user asks you to take an OTP or complete the application for them, YOU MUST REFUSE and say exactly something like: "I can't collect or handle OTPs or banking credentials. I can explain the application steps, but you'll need to complete the secure part yourself."
-
-OPT-OUT & END CALL:
-- If the user says "stop", "don't call me", or asks to opt out, apologize briefly and call `end_conversation`.
-- If the user says "bye", call `end_conversation`.
+- If the user asks you to take an OTP or complete an application for them, YOU MUST REFUSE and say exactly something like: "I can't collect or handle OTPs or banking credentials. I can explain the application steps, but you'll need to complete the secure part yourself."
 
 IDENTITY:
 - Tone: Professional, warm, concise. 
-- You support Hinglish/English.
+- You support Hinglish/English. Mirror the user's language/register where appropriate (English, Hindi, Bengali, Code-mixed speech).
 - Maximum 1-2 short sentences per response. Keep it very conversational.
+
+HUMAN ESCALATION POLICY:
+You are not responsible for solving every financial problem. You must recognize when a human should take over.
+Escalate when:
+1. The user reports possible fraud or suspicious financial activity.
+2. The user asks for a financial decision or approval that you do not have authority to make.
+
+Before creating an escalation:
+1. Explain why human assistance is appropriate.
+2. Explain what information will be shared.
+3. Explicitly ask for permission (e.g. "Would you like me to create a support request?").
+4. Wait for the user's answer.
+5. Only call `create_escalation` after explicit consent.
+
+If the user says NO, respect their decision and do not create the escalation.
 """
 
 class Assistant(Agent):
@@ -164,6 +170,59 @@ class Assistant(Agent):
             logger.error(f"Error checking schemes: {e}")
             return {"success": False, "error": "Service temporarily unavailable"}
 
+    @function_tool
+    async def create_escalation(
+        self,
+        reason: str,
+        summary: str,
+        what_happened: str,
+        what_agent_checked: str,
+        urgency: str,
+        language: str,
+        preferred_follow_up: str = "phone"
+    ):
+        """Use this tool ONLY after explicit permission from the user to escalate the issue to a human.
+        reason: Must be either 'possible_fraud' or 'decision_required'
+        summary: Short useful summary of the issue
+        what_happened: Details about what the user reported
+        what_agent_checked: Details about what FinVoice checked or explained
+        urgency: 'low', 'medium', 'high', or 'emergency'. Use 'high' for possible fraud, 'medium' for decision required.
+        language: The caller's language
+        preferred_follow_up: 'phone', 'email', or 'other'
+        """
+        user_id = self._get_user_id()
+        logger.info(f"Creating escalation for user {user_id}, reason: {reason}")
+        try:
+            reference_id = database.create_escalation(
+                user_id=user_id,
+                reason=reason,
+                summary=summary,
+                what_happened=what_happened,
+                what_agent_checked=what_agent_checked,
+                urgency=urgency,
+                language=language,
+                preferred_follow_up=preferred_follow_up
+            )
+
+            # Send reference ID to frontend via data channel
+            if self.room and self.room.local_participant:
+                import json
+                payload = json.dumps({
+                    "type": "escalation_created",
+                    "data": {
+                        "reference_id": reference_id,
+                        "user_id": user_id,
+                        "summary": summary
+                    }
+                }).encode('utf-8')
+                await self.room.local_participant.publish_data(payload)
+
+            return f"Success. Escalate reference ID is {reference_id}. Tell the user exactly: 'Your support request has been created. Your reference number is {reference_id}. A support representative can review the request through the support system.'"
+        except Exception as e:
+            logger.error(f"Error creating escalation: {e}")
+            return "Failed to create escalation. Tell the user: 'I'm unable to create the support request right now. Please try again later.'"
+
+
 
 server = AgentServer()
 
@@ -228,29 +287,55 @@ async def my_agent(ctx: JobContext):
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
         agent=Assistant(room=ctx.room),
-        room=ctx.room,
-        room_input_options=room_io.RoomInputOptions(
-            participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_SIP]
-        )
+        room=ctx.room
     )
+
+    async def handle_sip_participant(participant: rtc.RemoteParticipant):
+        if (participant.identity and participant.identity.startswith("sip")) or getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+            logger.info("SIP Participant connected! Triggering outbound context...")
+
+            # Fetch latest active outbound call for real data
+            active_call = None
+            for call in database.get_outbound_calls():
+                if call['status'] in ['initiated', 'ringing', 'connected', 'answered']:
+                    active_call = call
+                    break
+
+            user_name = "User"
+            reason = "a follow up"
+            if active_call:
+                user_id = active_call.get('user_id', '')
+                if '-' in user_id:
+                    user_name = user_id.split('-')[0].capitalize()
+                reason = active_call.get('reason', 'a follow up')
+
+            outbound_prompt = f"""
+[CRITICAL SYSTEM OVERRIDE]
+You are now making a PROACTIVE OUTBOUND PHONE CALL to a user named {user_name}.
+Reason for this call: {reason}.
+Act as the initiator. Keep your tone warm and professional. 
+Do not wait for them to ask a question, you are the one calling them!
+If the user says "stop", "don't call me", or asks to opt out, apologize briefly and call `end_conversation`.
+"""
+            from livekit.agents.llm import ChatMessage
+            session.chat_ctx.messages.append(ChatMessage(role="system", content=outbound_prompt))
+
+            greeting = f"Hi {user_name}, this is Anisha calling from FinVoice. I'm calling regarding {reason}. Are you available to speak?"
+            session.say(greeting, add_to_chat_ctx=True)
 
     @ctx.room.on("participant_connected")
     def on_participant_connected(participant: rtc.RemoteParticipant):
-        logger.info(f"Participant connected: {participant.identity}")
-        # If it's a SIP participant (Twilio), trigger the outbound greeting immediately
-        if (participant.identity and participant.identity.startswith("sip")) or getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
-            greeting = "Hi Rahul, this is Anisha calling from FinVoice. I'm calling because a government scheme you previously checked has an approaching application deadline. If you don't want these calls, just say stop and I won't call you again."
-            session.say(greeting, add_to_chat_ctx=True)
-            
+        import asyncio
+        asyncio.create_task(handle_sip_participant(participant))
+
     # Join the room and connect to the user
     await ctx.connect()
-    
+
     # Greet any SIP participants already in the room
+    import asyncio
     for participant in ctx.room.remote_participants.values():
         if (participant.identity and participant.identity.startswith("sip")) or getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
-            logger.info("SIP Participant already in room! Triggering outbound greeting...")
-            greeting = "Hi Rahul, this is Anisha calling from FinVoice. I'm calling because a government scheme you previously checked has an approaching application deadline. If you don't want these calls, just say stop and I won't call you again."
-            session.say(greeting, add_to_chat_ctx=True)
+            asyncio.create_task(handle_sip_participant(participant))
             break
 
 

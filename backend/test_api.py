@@ -1,5 +1,6 @@
+
 import requests
-import json
+
 payload = {
     "phone_number": "+1234567890",
     "user_id": "test",

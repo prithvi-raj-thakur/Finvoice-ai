@@ -119,6 +119,7 @@ export function PhoneScreen({
 
   const [hasConnectedOnce, setHasConnectedOnce] = React.useState(false);
   const [schemeData, setSchemeData] = React.useState<any>(null);
+  const [escalationData, setEscalationData] = React.useState<any>(null);
 
   const [outboundStatus, setOutboundStatus] = React.useState<'setup' | 'calling' | 'ringing' | 'connected' | 'completed' | 'failed' | 'no_answer'>('setup');
   const [outboundName, setOutboundName] = React.useState('Rahul');
@@ -143,6 +144,9 @@ export function PhoneScreen({
   React.useEffect(() => {
     if (viewMode !== 'outbound') {
       document.querySelectorAll('audio, video').forEach((a: any) => { a.muted = false; a.volume = 1; });
+      if (localParticipant && !localParticipant.isMicrophoneEnabled) {
+        localParticipant.setMicrophoneEnabled(true).catch(e => console.error(e));
+      }
       return;
     }
 
@@ -231,6 +235,8 @@ export function PhoneScreen({
         const data = JSON.parse(text);
         if (data.type === 'scheme_results') {
           setSchemeData(data.data);
+        } else if (data.type === 'escalation_created') {
+          setEscalationData(data.data);
         }
       } catch (e) {
         console.error("Failed to parse data message", e);
@@ -537,6 +543,64 @@ export function PhoneScreen({
                         <p className="text-[12px] text-[#8A8A94] leading-relaxed">Could not find a specific government scheme in the active dataset matching your criteria.</p>
                       </div>
                     )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Escalation Card Overlay */}
+              <AnimatePresence>
+                {escalationData && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                    className="absolute inset-x-4 top-20 bottom-24 bg-[#050507]/90 backdrop-blur-xl border border-rose-500/[0.2] rounded-2xl p-5 z-50 flex flex-col shadow-2xl overflow-y-auto"
+                  >
+                    <div className="flex items-center justify-between mb-4 shrink-0">
+                      <div className="flex items-center gap-2">
+                        <div className="size-7 rounded-full bg-rose-500/20 flex items-center justify-center">
+                          <svg className="w-4 h-4 text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                          </svg>
+                        </div>
+                        <span className="text-[13px] font-semibold text-[#F5F5F7] tracking-wide uppercase">Support Escalation</span>
+                      </div>
+                      <button onClick={() => setEscalationData(null)} className="p-1 rounded-full hover:bg-white/[0.1] transition-colors">
+                        <svg className="w-4 h-4 text-[#8A8A94]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+
+                    <div className="flex flex-col gap-5 mt-2">
+                      <div className="flex flex-col items-center justify-center py-4 bg-rose-500/10 border border-rose-500/20 rounded-xl">
+                        <span className="text-[10px] text-rose-400 font-semibold uppercase tracking-widest mb-1">Reference ID</span>
+                        <span className="text-[20px] font-mono text-white tracking-wider">{escalationData.reference_id}</span>
+                      </div>
+
+                      <div className="space-y-1">
+                        <span className="text-[10px] text-[#8A8A94] uppercase tracking-wider font-semibold">User</span>
+                        <p className="text-[14px] text-[#F5F5F7] font-medium">{escalationData.user_id}</p>
+                      </div>
+
+                      <div className="space-y-1">
+                        <span className="text-[10px] text-[#8A8A94] uppercase tracking-wider font-semibold">Purpose & Need</span>
+                        <p className="text-[13px] text-[#8A8A94] leading-relaxed">
+                          An official escalation ticket has been generated to route this critical request to our human support team. This ensures the user's complex financial issue or potential fraud report is handled securely and correctly by a specialized operator. The AI agent has safely handed off control.
+                        </p>
+                      </div>
+
+                      <div className="mt-auto pt-4">
+                        <a 
+                          href="/support" 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="w-full py-3 rounded-xl font-semibold text-[13px] bg-rose-600 hover:bg-rose-700 text-white flex items-center justify-center transition-colors"
+                        >
+                          View in Support Dashboard
+                        </a>
+                      </div>
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>

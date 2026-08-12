@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { motion, LayoutGroup } from 'motion/react';
+import Link from 'next/link';
 import {
   useVoiceAssistant,
   useSessionContext,
@@ -119,14 +120,14 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
               <span className="text-[10px] text-[#8A8A94] font-medium">{language}</span>
             </div>
             
-            {/* Memory indicator */}
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20" title="FinVoice remembers with your permission">
-              <svg className="w-3 h-3 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z" />
-                <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z" />
+            {/* Support dashboard link */}
+            <Link href="/support" target="_blank" className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-purple-500/10 border border-purple-500/20 hover:bg-purple-500/20 transition-colors" title="Open Human Support Dashboard">
+              <svg className="w-3 h-3 text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <path d="M9 3v18" />
               </svg>
-              <span className="text-[10px] text-indigo-300 font-medium whitespace-nowrap">Memory enabled</span>
-            </div>
+              <span className="text-[10px] text-purple-300 font-medium whitespace-nowrap">Support Dashboard</span>
+            </Link>
           </div>
         </motion.nav>
 

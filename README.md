@@ -187,6 +187,27 @@ For outbound calling to work:
 
 ---
 
+## Day 7 — Human Escalation
+
+**Feature:** Human Support Escalation
+**Use Case:** FinVoice is not responsible for solving every financial problem. There are scenarios where a human must take over. This implementation handles these hand-offs securely and reliably.
+
+### Escalation Scenarios
+FinVoice will escalate in two primary cases:
+1. **Possible fraud:** Suspicious activity, unfamiliar transactions, or stolen account details. FinVoice will NOT ask for passwords or investigate private banking systems.
+2. **Decision outside agent authority:** If the user asks for a definitive loan approval or guarantee that the AI is not authorized to give.
+
+### How it Works
+- **`create_escalation()` Tool:** The LLM can call this backend function when it determines human assistance is needed.
+- **Consent Requirement:** The agent MUST explicitly ask the user for permission (e.g. "Would you like me to send a summary to a human support agent?") BEFORE calling the tool. If the user says no, the agent respects their decision.
+- **Escalation Summary:** A structured, privacy-safe summary is generated, including `reason`, `urgency`, `what_happened`, `what_agent_checked`, `language`, and `preferred_follow_up`.
+- **Reference IDs:** The system generates a unique Reference ID (e.g. `ESC-2026-1042`), which the agent reads to the user.
+- **Duplicate Prevention:** If the same user has an open escalation for the same issue, the system gracefully returns the existing Reference ID instead of creating a duplicate.
+- **Privacy Protections:** Strict LLM prompt guardrails ensure the agent NEVER requests or logs OTP, PIN, CVV, passwords, Aadhaar, PAN, or other banking credentials.
+- **Support Dashboard:** A polished Next.js frontend route (`/support`) provides a visual Support Center for human agents. It fetches open requests directly from the local SQLite database. Human agents can view issue summaries and transition the `urgency` levels (High/Medium/Low) or `status` (OPEN/IN_PROGRESS/RESOLVED).
+
+---
+
 ## Deploy
 
 Want to deploy this beyond localhost? You'll need to deploy **two services**: the backend agent and the frontend. Both must use the same LiveKit project.

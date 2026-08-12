@@ -1,13 +1,15 @@
+import logging
 import os
 import uuid
-import logging
+from typing import Optional
+
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
 from twilio.rest import Client
+
 import database
-from dotenv import load_dotenv
 
 env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env.local")
 load_dotenv(env_path, override=True)
@@ -45,7 +47,7 @@ async def initiate_outbound_call(req: OutboundCallRequest):
             return {"success": False, "error": "User has opted out of outbound calls"}
 
     call_id = f"call_{uuid.uuid4().hex[:8]}"
-    
+
     # Save call context to DB
     database.create_outbound_call(
         call_id=call_id,
@@ -62,7 +64,7 @@ async def initiate_outbound_call(req: OutboundCallRequest):
     # SIMULATION MODE: If Twilio is not configured, simulate the call connecting
     if not all([account_sid, auth_token, twilio_number, base_url]):
         logger.warning(f"Twilio/Ngrok config missing. Simulating outbound call {call_id} instead of dialing real phone.")
-        
+
         import asyncio
         async def simulate_call():
             # Simulate ringing
@@ -71,7 +73,7 @@ async def initiate_outbound_call(req: OutboundCallRequest):
             # Simulate answered/connected
             database.update_outbound_call_status(call_id, "connected")
             logger.info(f"Simulated call {call_id} is now connected.")
-            
+
         import threading
         def run_sim():
             asyncio.run(simulate_call())
@@ -88,7 +90,7 @@ async def initiate_outbound_call(req: OutboundCallRequest):
         <Sip>sip:{room_name}@{os.environ.get("LIVEKIT_SIP_DOMAIN")}</Sip>
     </Dial>
 </Response>"""
-        
+
         client = Client(account_sid, auth_token)
         call = client.calls.create(
             to=req.phone_number,
@@ -109,11 +111,11 @@ async def twilio_webhook(request: Request):
     call_id = request.query_params.get("call_id")
     room_name = request.query_params.get("room_name") or f"outbound-{call_id}"
     livekit_sip_domain = os.environ.get("LIVEKIT_SIP_DOMAIN")
-    
+
     if not livekit_sip_domain:
         logger.error("LIVEKIT_SIP_DOMAIN is not set!")
         return Response(content="<Response><Say>System configuration error.</Say></Response>", media_type="application/xml")
-    
+
     # Update status to answered when webhook is hit (user picked up)
     if call_id:
         database.update_outbound_call_status(call_id, "answered")
@@ -132,10 +134,10 @@ async def twilio_status(request: Request):
     call_id = request.query_params.get("call_id")
     form_data = await request.form()
     call_status = form_data.get("CallStatus")
-    
+
     if call_id and call_status:
         logger.info(f"Call {call_id} status changed to {call_status}")
-        
+
         # Map Twilio status to internal status
         status_map = {
             "queued": "initiated",
@@ -148,10 +150,10 @@ async def twilio_status(request: Request):
             "canceled": "no_answer",
             "failed": "failed"
         }
-        
+
         internal_status = status_map.get(call_status, call_status)
         database.update_outbound_call_status(call_id, internal_status)
-        
+
     return Response(content="OK")
 
 @app.get("/api/outbound-calls")

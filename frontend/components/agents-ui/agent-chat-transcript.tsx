@@ -61,10 +61,14 @@ export function AgentChatTranscript({
           const time = new Date(timestamp);
           const title = time.toLocaleTimeString(locale, { timeStyle: 'full' });
 
+          // Strip raw tool calls that might leak from the LLM (e.g., Llama 3 <function=...>)
+          const cleanMessage = message.replace(/<function=[\s\S]*?(?:<\/function>|$)/gi, '').trim();
+          if (!cleanMessage) return null;
+
           return (
             <Message key={id} title={title} from={messageOrigin}>
               <MessageContent>
-                <MessageResponse>{message}</MessageResponse>
+                <MessageResponse>{cleanMessage}</MessageResponse>
               </MessageContent>
             </Message>
           );

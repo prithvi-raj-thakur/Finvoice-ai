@@ -1,7 +1,7 @@
 import os
-import sys
-from twilio.rest import Client
+
 from dotenv import load_dotenv
+from twilio.rest import Client
 
 env_path = os.path.join(os.path.dirname(__file__), ".env.local")
 load_dotenv(env_path, override=True)
