@@ -58,7 +58,6 @@ async def initiate_outbound_call(req: OutboundCallRequest):
     )
 
     room_name = req.room_name or f"outbound-{call_id}"
-    webhook_url = f"{base_url}/api/twilio/webhook?call_id={call_id}&room_name={room_name}" if base_url else ""
     status_callback = f"{base_url}/api/twilio/status?call_id={call_id}" if base_url else ""
 
     # SIMULATION MODE: If Twilio is not configured, simulate the call connecting

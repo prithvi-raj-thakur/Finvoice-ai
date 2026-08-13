@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { formatDistanceToNow } from "date-fns"; // We might not have date-fns, let's use a simple format
+
 import { Clock, CheckCircle, AlertTriangle, User, RefreshCw, MessageSquare } from "lucide-react";
 
 export default function SupportDashboard() {
@@ -69,7 +69,7 @@ export default function SupportDashboard() {
       case "OPEN":
         return "bg-blue-500/10 text-blue-500 border-blue-500/20";
       case "IN_PROGRESS":
-        return "bg-purple-500/10 text-purple-500 border-purple-500/20";
+        return "bg-sky-500/10 text-sky-500 border-sky-500/20";
       case "RESOLVED":
         return "bg-green-500/10 text-green-500 border-green-500/20";
       default:
@@ -89,8 +89,8 @@ export default function SupportDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-[#050505] text-white p-8 font-sans selection:bg-purple-500/30">
-      <div className="max-w-7xl mx-auto space-y-8">
+    <div className="min-h-screen bg-[#030712] text-white p-8 font-sans selection:bg-[#38bdf8]/30">
+      <div className="max-w-7xl mx-auto space-y-8 pt-4">
         
         {/* Header */}
         <header className="flex justify-between items-end border-b border-white/10 pb-6">
@@ -116,7 +116,7 @@ export default function SupportDashboard() {
           {[
             { label: "OPEN REQUESTS", value: openCount, icon: Clock, color: "text-blue-500" },
             { label: "HIGH PRIORITY", value: highPriorityCount, icon: AlertTriangle, color: "text-red-500" },
-            { label: "IN PROGRESS", value: inProgressCount, icon: RefreshCw, color: "text-purple-500" },
+            { label: "IN PROGRESS", value: inProgressCount, icon: RefreshCw, color: "text-sky-500" },
             { label: "RESOLVED", value: resolvedCount, icon: CheckCircle, color: "text-green-500" },
           ].map((stat, i) => (
             <div key={i} className="bg-white/5 border border-white/10 rounded-2xl p-6 backdrop-blur-md">
@@ -149,7 +149,7 @@ export default function SupportDashboard() {
                     onClick={() => setSelectedEscalation(esc)}
                     className={`w-full text-left p-4 rounded-xl border transition-all ${
                       selectedEscalation?.reference_id === esc.reference_id 
-                        ? "bg-purple-500/10 border-purple-500/30" 
+                        ? "bg-sky-500/10 border-sky-500/30" 
                         : "border-transparent hover:bg-white/5"
                     }`}
                   >
@@ -191,7 +191,7 @@ export default function SupportDashboard() {
                     {selectedEscalation.status !== "IN_PROGRESS" && (
                       <button 
                         onClick={() => updateStatus(selectedEscalation.reference_id, "IN_PROGRESS")}
-                        className="px-4 py-2 text-sm rounded-lg bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border border-purple-500/30 transition-colors font-medium"
+                        className="px-4 py-2 text-sm rounded-lg bg-sky-500/20 text-sky-400 hover:bg-sky-500/30 border border-sky-500/30 transition-colors font-medium"
                       >
                         Mark In Progress
                       </button>
@@ -222,7 +222,7 @@ export default function SupportDashboard() {
                     <div>
                       <p className="text-[10px] uppercase text-white/40 mb-1 font-semibold tracking-wider">Status</p>
                       <p className="text-sm font-medium flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${selectedEscalation.status === 'OPEN' ? 'bg-blue-500' : selectedEscalation.status === 'IN_PROGRESS' ? 'bg-purple-500' : 'bg-green-500'}`} />
+                        <div className={`w-2 h-2 rounded-full ${selectedEscalation.status === 'OPEN' ? 'bg-blue-500' : selectedEscalation.status === 'IN_PROGRESS' ? 'bg-sky-500' : 'bg-green-500'}`} />
                         {selectedEscalation.status}
                       </p>
                     </div>
@@ -238,7 +238,7 @@ export default function SupportDashboard() {
 
                   {/* Summary */}
                   <div>
-                    <h3 className="text-xs uppercase text-purple-400 font-semibold tracking-wider mb-3 flex items-center gap-2">
+                    <h3 className="text-xs uppercase text-sky-400 font-semibold tracking-wider mb-3 flex items-center gap-2">
                       <MessageSquare size={14} /> Agent Summary
                     </h3>
                     <div className="p-4 bg-white/[0.02] border border-white/5 rounded-xl text-white/80 leading-relaxed text-sm">

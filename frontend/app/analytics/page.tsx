@@ -56,12 +56,12 @@ export default function AnalyticsDashboard() {
   const getOutcomeColor = (outcome: string) => {
     if (outcome === "SUCCESS") return "text-green-500 bg-green-500/10 border-green-500/20";
     if (outcome === "FAILED") return "text-red-500 bg-red-500/10 border-red-500/20";
-    return "text-purple-500 bg-purple-500/10 border-purple-500/20";
+    return "text-sky-500 bg-sky-500/10 border-sky-500/20";
   };
 
   return (
-    <div className="min-h-screen bg-[#050505] text-white p-4 md:p-8 font-sans selection:bg-purple-500/30">
-      <div className="max-w-6xl mx-auto space-y-8">
+    <div className="min-h-screen bg-[#030712] text-white p-4 md:p-8 font-sans selection:bg-[#38bdf8]/30">
+      <div className="max-w-6xl mx-auto space-y-8 pt-10">
         
         {/* Header */}
         <header className="flex justify-between items-end border-b border-white/10 pb-6">
@@ -114,7 +114,7 @@ export default function AnalyticsDashboard() {
           <div className="bg-white/5 border border-white/10 rounded-2xl p-6 backdrop-blur-md">
             <div className="flex justify-between items-start mb-4">
               <p className="text-white/50 text-xs font-semibold tracking-wider">SUCCESS RATE</p>
-              <RefreshCw size={16} className="text-purple-500" />
+              <RefreshCw size={16} className="text-sky-500" />
             </div>
             <p className="text-4xl font-light">{successRate}%</p>
             <p className="text-white/40 text-xs mt-2">Of total interactions</p>

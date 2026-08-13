@@ -30,33 +30,44 @@ logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
 SYSTEM_PROMPT = """
-You are Anisha, an AI from FinVoice.
-You are a helpful, professional, and knowledgeable financial assistant.
-NEVER output code, JSON, markdown, or mathematical terms. Respond with natural conversational English ONLY.
+You are Anisha, a Voice-First Financial Access Companion for FinVoice.
+Your goal is to guide the user through a COMPLETE FINANCIAL JOURNEY:
+UNDERSTAND -> DISCOVER -> CHECK -> EXPLAIN -> REMEMBER -> ACT -> ESCALATE.
 
-OTP & SECURITY RULES (CRITICAL):
-- You MUST NEVER collect or handle OTPs, passwords, PINs, or banking credentials.
-- If the user asks you to take an OTP or complete an application for them, YOU MUST REFUSE and say exactly something like: "I can't collect or handle OTPs or banking credentials. I can explain the application steps, but you'll need to complete the secure part yourself."
+IMPORTANT RULES:
+1. Speak conversationally (English, Hindi, Code-Mixed). NEVER output markdown or long paragraphs. Keep it to 1-3 short sentences.
+2. If the user interrupts, adjust instantly.
+3. If they ask to "explain simply" or "explain in Hindi", adapt your complexity and language dynamically.
 
-IDENTITY:
-- Tone: Professional, warm, concise. 
-- You support Hinglish/English. Mirror the user's language/register where appropriate (English, Hindi, Bengali, Code-mixed speech).
-- Maximum 1-2 short sentences per response. Keep it very conversational.
+--- 1. FINANCIAL INTENT & ELIGIBILITY ENGINE ---
+Do not interrogate with long forms. If a user says "I need help", intelligently narrow down the intent. Ask ONE question at a time (e.g. "Aap student hain, farmer hain, ya business chalate hain?").
+Check eligibility conversationally. Use `check_scheme_eligibility` when you have basic info.
 
-HUMAN ESCALATION POLICY:
-You are not responsible for solving every financial problem. You must recognize when a human should take over.
-Escalate when:
-1. The user reports possible fraud or suspicious financial activity.
-2. The user asks for a financial decision or approval that you do not have authority to make.
+--- 2. SCHEME MATCHING & EXPLANATION (WHY ENGINE) ---
+When returning schemes, DO NOT just list them. Explain WHY it fits: "Based on what you told me, this is relevant because you're a student..."
+NEVER GUARANTEE APPROVAL. Always say: "Based on the information provided, you appear to meet initial criteria. Official approval depends on verification."
 
-Before creating an escalation:
-1. Explain why human assistance is appropriate.
-2. Explain what information will be shared.
-3. Explicitly ask for permission (e.g. "Would you like me to create a support request?").
-4. Wait for the user's answer.
-5. Only call `create_escalation` after explicit consent.
+--- 3. DOCUMENT CHECKLIST & NEXT BEST ACTION ---
+End scheme explanations with a NEXT BEST ACTION.
+Example: "Your next step is to get your income certificate. Would you like me to explain how?"
+Do not invent documents; rely on what the tool returns.
 
-If the user says NO, respect their decision and do not create the escalation.
+--- 4. SCAM SHIELD ---
+If the user mentions OTP, PIN, CVV, or someone asking for money, recognize it as potential fraud.
+Say: "Please do not share your OTP or PIN. This may be a scam."
+
+--- 5. SOURCE TRANSPARENCY & UNCERTAINTY ---
+Whenever asked about details you don't know, DO NOT hallucinate.
+Say: "I don't have enough verified information to answer that confidently."
+
+--- 6. MEMORY & FINANCIAL JOURNEY ---
+Use `save_user_memory` ONLY AFTER EXPLICIT CONSENT.
+If they ask "What do you remember?", use `lookup_user_memory`.
+Use `forget_user_memory` if they ask to stop remembering.
+
+--- 7. HUMAN ESCALATION ---
+Escalate when: fraud is suspected, verification is required, or explicitly requested.
+ALWAYS ask for consent before escalating.
 """
 
 class Assistant(Agent):
@@ -79,9 +90,25 @@ class Assistant(Agent):
         user_id = self._get_user_id()
         logger.info(f"Looking up memory for user {user_id}")
         data = database.get_user(user_id)
+
+        # Include open escalations for follow-up context
+        open_escalation = None
+        try:
+            escalations = database.get_escalations()
+            for esc in escalations:
+                if esc['user_id'] == user_id and esc['status'] in ['OPEN', 'IN REVIEW']:
+                    open_escalation = {
+                        "reference_id": esc['reference_id'],
+                        "status": esc['status'],
+                        "reason": esc['reason']
+                    }
+                    break
+        except Exception as e:
+            logger.warning(f"Failed to fetch escalations: {e}")
+
         if data:
-            return {"found": True, **data}
-        return {"found": False}
+            return {"found": True, "open_escalation": open_escalation, **data}
+        return {"found": False, "open_escalation": open_escalation}
 
     @function_tool
     async def save_user_memory(
@@ -168,8 +195,8 @@ class Assistant(Agent):
             # Return a tiny summary to the LLM so it doesn't bloat the context window
             scheme_count = len(results.get("schemes", []))
             scheme_names = ", ".join([s["name"] for s in results.get("schemes", [])])
-            self.success_reason = "eligibility_check_completed"
-            return f"Found {scheme_count} schemes: {scheme_names}. The UI has been updated with full details. Tell the user you found these matches and give a VERY brief 30-word intro overall without explaining each one fully yet. Wait for them to ask for more details."
+            self.success_reason = "scheme_discovered"
+            return f"Found {scheme_count} schemes: {scheme_names}. The UI has been updated with full details. Tell the user you found these matches and give a VERY brief 1-2 sentence intro explaining WHY they match based on what the user told you. Tell the user you can explain the eligibility criteria and documents needed, and ask what they want to do next."
         except Exception as e:
             logger.error(f"Error checking schemes: {e}")
             self.failure_reason = "tool_failure"
@@ -321,7 +348,7 @@ async def my_agent(ctx: JobContext):
 [CRITICAL SYSTEM OVERRIDE]
 You are now making a PROACTIVE OUTBOUND PHONE CALL to a user named {user_name}.
 Reason for this call: {reason}.
-Act as the initiator. Keep your tone warm and professional. 
+Act as the initiator. Keep your tone warm and professional.
 Do not wait for them to ask a question, you are the one calling them!
 If the user says "stop", "don't call me", or asks to opt out, apologize briefly and call `end_conversation`.
 """
@@ -338,11 +365,11 @@ If the user says "stop", "don't call me", or asks to opt out, apologize briefly 
 
     # Join the room and connect to the user
     await ctx.connect()
-    
+
     # Initialize Analytics
     call_id = ctx.room.name
     channel = "browser"
-    
+
     # Check if there are any SIP participants immediately available
     for participant in ctx.room.remote_participants.values():
         if (participant.identity and participant.identity.startswith("sip")) or getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
@@ -360,12 +387,17 @@ If the user says "stop", "don't call me", or asks to opt out, apologize briefly 
         logger.info(f"Room {ctx.room.name} disconnected. Updating analytics.")
         try:
             if assistant.success_reason:
-                outcome = "SUCCESS"
+                outcome = assistant.success_reason.upper()
                 failure_reason = None
             else:
-                outcome = "FAILED"
                 failure_reason = assistant.failure_reason or "incomplete_task"
-                
+                if failure_reason == "user_hangup":
+                    outcome = "USER_ABANDONED"
+                elif failure_reason == "tool_failure":
+                    outcome = "TOOL_FAILURE"
+                else:
+                    outcome = "FAILED"
+
             database.update_call_analytics(
                 call_id=call_id,
                 outcome=outcome,

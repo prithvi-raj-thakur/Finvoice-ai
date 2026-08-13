@@ -41,7 +41,7 @@ async def test_fraud_no_consent() -> None:
         AgentSession(llm=llm_instance) as session,
     ):
         await session.start(Assistant())
-        result = await session.run(user_input="I think someone made a transaction using my account.")
+        await session.run(user_input="I think someone made a transaction using my account.")
 
         result2 = await session.run(user_input="No, don't send it.")
 

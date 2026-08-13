@@ -36,7 +36,7 @@ export function App({ appConfig }: AppProps) {
         localStorage.setItem('finvoice_user_id', identity);
       }
     }
-    
+
     return typeof process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT === 'string'
       ? getSandboxTokenSource(appConfig)
       : TokenSource.endpoint(`/api/token?identity=${identity}`);
@@ -50,7 +50,7 @@ export function App({ appConfig }: AppProps) {
   return (
     <AgentSessionProvider session={session}>
       <AppSetup />
-      <main className="grid h-svh grid-cols-1 place-content-center">
+      <main className="w-full">
         <ViewController appConfig={appConfig} />
       </main>
       <StartAudioButton label="Start Audio" />

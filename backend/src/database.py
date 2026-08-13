@@ -4,6 +4,7 @@ import os
 import random
 import sqlite3
 from datetime import datetime, timezone
+from typing import Optional
 
 logger = logging.getLogger("database")
 
@@ -109,8 +110,8 @@ def get_user(user_id: str):
         return data
     return None
 
-def save_user(user_id: str, name: str = None, language_preference: str = None,
-              schemes_checked: list = None, eligibility_answers: dict = None):
+def save_user(user_id: str, name: Optional[str] = None, language_preference: Optional[str] = None,
+              schemes_checked: Optional[list] = None, eligibility_answers: Optional[dict] = None):
     conn = get_db()
     cursor = conn.cursor()
 
@@ -160,7 +161,7 @@ def save_user(user_id: str, name: str = None, language_preference: str = None,
     else:
         cursor.execute("""
             INSERT INTO users (
-                user_id, name, language_preference, schemes_checked, 
+                user_id, name, language_preference, schemes_checked,
                 eligibility_answers, last_interaction, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
@@ -194,7 +195,7 @@ def set_opt_out(user_id: str, opt_out: bool = True):
     conn.commit()
     conn.close()
 
-def create_outbound_call(call_id: str, user_id: str, phone_number: str, reason: str, scheme_id: str = None):
+def create_outbound_call(call_id: str, user_id: str, phone_number: str, reason: str, scheme_id: Optional[str] = None):
     conn = get_db()
     cursor = conn.cursor()
     now = datetime.now(timezone.utc)
@@ -242,7 +243,7 @@ def create_escalation(user_id: str, reason: str, summary: str, what_happened: st
 
     # Check for existing open escalation for same user and reason
     cursor.execute("""
-        SELECT reference_id FROM escalations 
+        SELECT reference_id FROM escalations
         WHERE user_id = ? AND reason = ? AND status = 'OPEN'
     """, (user_id, reason))
     existing = cursor.fetchone()
@@ -262,8 +263,8 @@ def create_escalation(user_id: str, reason: str, summary: str, what_happened: st
 
     cursor.execute("""
         INSERT INTO escalations (
-            reference_id, user_id, reason, summary, what_happened, 
-            what_agent_checked, urgency, language, preferred_follow_up, 
+            reference_id, user_id, reason, summary, what_happened,
+            what_agent_checked, urgency, language, preferred_follow_up,
             status, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?)
     """, (
@@ -288,8 +289,8 @@ def update_escalation_status(reference_id: str, status: str):
     cursor = conn.cursor()
     now = datetime.now(timezone.utc)
     cursor.execute("""
-        UPDATE escalations 
-        SET status = ?, updated_at = ? 
+        UPDATE escalations
+        SET status = ?, updated_at = ?
         WHERE reference_id = ?
     """, (status, now, reference_id))
     conn.commit()
@@ -308,11 +309,11 @@ def create_call_analytics(call_id: str, user_id: str, channel: str = "browser", 
     conn.close()
     return call_id
 
-def update_call_analytics(call_id: str, outcome: str, success_reason: str = None, failure_reason: str = None):
+def update_call_analytics(call_id: str, outcome: str, success_reason: Optional[str] = None, failure_reason: Optional[str] = None):
     conn = get_db()
     cursor = conn.cursor()
     now = datetime.now(timezone.utc)
-    
+
     # Calculate duration
     cursor.execute("SELECT started_at FROM call_analytics WHERE id = ?", (call_id,))
     row = cursor.fetchone()
@@ -325,7 +326,7 @@ def update_call_analytics(call_id: str, outcome: str, success_reason: str = None
             logger.error(f"Error calculating duration: {e}")
 
     cursor.execute("""
-        UPDATE call_analytics 
+        UPDATE call_analytics
         SET ended_at = ?, duration = ?, outcome = ?, success_reason = ?, failure_reason = ?
         WHERE id = ?
     """, (now, duration, outcome, success_reason, failure_reason, call_id))
@@ -335,15 +336,15 @@ def update_call_analytics(call_id: str, outcome: str, success_reason: str = None
 def get_call_analytics_overview():
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) as total FROM call_analytics WHERE outcome IN ('SUCCESS', 'FAILED')")
+    cursor.execute("SELECT COUNT(*) as total FROM call_analytics WHERE outcome != 'IN_PROGRESS'")
     total = cursor.fetchone()['total']
-    
-    cursor.execute("SELECT COUNT(*) as success FROM call_analytics WHERE outcome = 'SUCCESS'")
+
+    cursor.execute("SELECT COUNT(*) as success FROM call_analytics WHERE outcome IN ('SUCCESS', 'SCHEME_DISCOVERED', 'ELIGIBILITY_CHECKED', 'ACTION_COMPLETED')")
     success = cursor.fetchone()['success']
-    
-    cursor.execute("SELECT COUNT(*) as failed FROM call_analytics WHERE outcome = 'FAILED'")
+
+    cursor.execute("SELECT COUNT(*) as failed FROM call_analytics WHERE outcome NOT IN ('SUCCESS', 'SCHEME_DISCOVERED', 'ELIGIBILITY_CHECKED', 'ACTION_COMPLETED', 'IN_PROGRESS')")
     failed = cursor.fetchone()['failed']
-    
+
     conn.close()
     return {
         "total_calls": total,
@@ -355,9 +356,9 @@ def get_recent_calls():
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT call_id, started_at, duration, channel, outcome, success_reason, failure_reason 
-        FROM call_analytics 
-        WHERE outcome IN ('SUCCESS', 'FAILED')
+        SELECT call_id, started_at, duration, channel, outcome, success_reason, failure_reason
+        FROM call_analytics
+        WHERE outcome != 'IN_PROGRESS'
         ORDER BY started_at DESC LIMIT 50
     """)
     rows = cursor.fetchall()

@@ -7,6 +7,7 @@ import {
   useVoiceAssistant,
   useSessionContext,
   useLocalParticipant,
+  useDataChannel,
 } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 import { IPhone } from '@/components/ui/iphone';
@@ -17,6 +18,9 @@ import {
 } from '@/components/finvoice/VisualizerSwitcher';
 import { ModeSwitcher, type ViewMode } from '@/components/finvoice/ModeSwitcher';
 import { AgentControlBar } from '@/components/agents-ui/agent-control-bar';
+import dynamic from 'next/dynamic';
+
+const GradientWaves = dynamic(() => import('@/components/site/Hero'), { ssr: false });
 
 interface FinvoiceSessionViewProps {
   onBack?: () => void;
@@ -30,6 +34,30 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
   const [visualizerType, setVisualizerType] = useState<VisualizerType>('aura');
   const [viewMode, setViewMode] = useState<ViewMode>('voice');
   const [micError, setMicError] = useState(false);
+
+  // Intelligence Layer State
+  const [schemes, setSchemes] = useState<any[]>([]);
+  const [escalation, setEscalation] = useState<any>(null);
+  const [journeyProgress, setJourneyProgress] = useState(15);
+  const [nextAction, setNextAction] = useState("Explain your financial situation");
+
+  useDataChannel((msg) => {
+    if (msg.payload) {
+      try {
+        const text = new TextDecoder().decode(msg.payload);
+        const parsed = JSON.parse(text);
+        if (parsed.type === 'scheme_results') {
+          setSchemes(parsed.data.schemes || []);
+          setJourneyProgress(60);
+          setNextAction("Review eligibility requirements");
+        } else if (parsed.type === 'escalation_created') {
+          setEscalation(parsed.data);
+          setJourneyProgress(100);
+          setNextAction("Wait for human follow-up");
+        }
+      } catch (e) {}
+    }
+  });
 
   const isSpeaking = agentState === 'speaking';
   const isListening = agentState === 'listening';
@@ -53,18 +81,32 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
 
   return (
     <LayoutGroup>
-      <div className="fixed inset-0 bg-[#050507] flex flex-col items-center justify-center overflow-hidden z-50">
-        {/* Background Video */}
-        <video
-          src="/futuristic-tunnel.mp4"
-          autoPlay
-          loop
-          muted
-          playsInline
-          className="absolute inset-0 w-full h-full object-cover z-0 opacity-40 mix-blend-screen"
-        />
-        {/* Dark gradient overlay to ensure UI legibility */}
-        <div className="absolute inset-0 bg-gradient-to-b from-[#050507]/80 via-[#050507]/60 to-[#050507]/90 z-0 pointer-events-none" />
+      <div className="fixed inset-0 bg-[#030712] flex flex-col items-center justify-center overflow-hidden z-50">
+        
+        {/* ─── NEW GRADIENT WAVES BACKGROUND ─── */}
+        <div className="absolute inset-0 w-full h-full z-0 opacity-60 pointer-events-none">
+          <GradientWaves
+            horizonColor="#0284c7"
+            waveColor="#0ea5e9"
+            crestColor="#bae6fd"
+            speed={0.2}
+            amplitude={1.5}
+            waveScale={0.8}
+            waveRatio={0.9}
+            swell={20}
+            turbulence={10}
+            tilt={1.2}
+            zoom={1.5}
+            height={4.0}
+            fogDepth={25}
+            detail="medium"
+            brightness={0.8}
+            mouseInteraction={true}
+            parallaxStrength={0.3}
+            grain={true}
+            grainIntensity={0.03}
+          />
+        </div>
 
         {/* ─── Top Nav ─── */}
         <motion.nav
@@ -89,7 +131,7 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
               </button>
             )}
             <div className="flex items-center gap-2 hidden sm:flex">
-              <div className="size-6 rounded-lg bg-gradient-to-br from-[#8B5CF6] to-[#6366F1] flex items-center justify-center">
+              <div className="size-6 rounded-lg bg-gradient-to-br from-[#38bdf8] to-[#0284c7] flex items-center justify-center">
                 <svg className="w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
                   <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
@@ -103,7 +145,7 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
 
           {/* Center Indicator */}
           <div className="hidden md:flex items-center gap-2 absolute left-1/2 -translate-x-1/2">
-            <div className="size-1.5 rounded-full bg-[#8B5CF6] animate-pulse" />
+            <div className="size-1.5 rounded-full bg-[#38bdf8] animate-pulse" />
             <span className="text-[11px] font-medium text-[#F5F5F7] tracking-wider uppercase">
               Live Session
             </span>
@@ -121,12 +163,12 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
             </div>
             
             {/* Support dashboard link */}
-            <Link href="/support" target="_blank" className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-purple-500/10 border border-purple-500/20 hover:bg-purple-500/20 transition-colors" title="Open Human Support Dashboard">
-              <svg className="w-3 h-3 text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <Link href="/support" target="_blank" className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-sky-500/10 border border-sky-500/20 hover:bg-sky-500/20 transition-colors" title="Open Human Support Dashboard">
+              <svg className="w-3 h-3 text-sky-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="3" y="3" width="18" height="18" rx="2" />
                 <path d="M9 3v18" />
               </svg>
-              <span className="text-[10px] text-purple-300 font-medium whitespace-nowrap">Support Dashboard</span>
+              <span className="text-[10px] text-sky-300 font-medium whitespace-nowrap">Support Dashboard</span>
             </Link>
           </div>
         </motion.nav>
@@ -138,39 +180,92 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
             initial={{ opacity: 0, x: -30 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.8, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="hidden lg:flex flex-col gap-8 w-[320px] shrink-0 bg-white/[0.02] border border-white/[0.05] backdrop-blur-xl rounded-3xl p-8"
+            className="hidden lg:flex flex-col gap-6 w-[360px] shrink-0 bg-white/[0.02] border border-white/[0.05] backdrop-blur-xl rounded-3xl p-8 overflow-y-auto max-h-[80vh] custom-scrollbar"
           >
-            <div>
-              <h1 className="text-4xl font-semibold text-[#F5F5F7] tracking-tight leading-tight">
-                FinVoice AI
-              </h1>
-              <p className="text-sm text-[#8A8A94] mt-2 leading-relaxed">
-                Your premium financial
-                <br />
-                voice companion.
-              </p>
-            </div>
-
-            <div className="h-px bg-white/[0.06]" />
-
-            <div className="flex flex-col gap-4">
-              <div className="flex flex-col gap-1.5">
-                <span className="text-xs text-[#8A8A94]/60 uppercase tracking-wider font-medium">
-                  Voice Active
-                </span>
-                <span className="text-sm text-[#F5F5F7] font-medium">{language}</span>
+            {schemes.length > 0 ? (
+              <div className="flex flex-col gap-6">
+                <div>
+                  <h2 className="text-2xl font-semibold text-[#F5F5F7] tracking-tight">Opportunities Found</h2>
+                  <p className="text-xs text-[#8A8A94] mt-1">Based on your shared context</p>
+                </div>
+                <div className="flex flex-col gap-4">
+                  {schemes.map((scheme, idx) => (
+                    <div key={idx} className="p-4 rounded-2xl bg-white/[0.03] border border-white/[0.08] hover:bg-white/[0.05] transition-colors">
+                      <h3 className="text-[14px] font-semibold text-white/90 mb-2 leading-snug">{scheme.name}</h3>
+                      <p className="text-[12px] text-white/60 leading-relaxed mb-4">{scheme.why_relevant}</p>
+                      
+                      <div className="flex flex-col gap-2">
+                        <span className="text-[10px] uppercase tracking-wider text-[#38bdf8] font-medium">Required Documents</span>
+                        <ul className="flex flex-col gap-1.5">
+                          {scheme.documents?.map((doc: string, i: number) => (
+                            <li key={i} className="text-[11px] text-white/70 flex items-start gap-1.5">
+                              <svg className="w-3.5 h-3.5 text-green-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                              </svg>
+                              {doc}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      
+                      <div className="mt-4 pt-3 border-t border-white/[0.05] flex justify-between items-center">
+                        <span className="text-[9px] text-white/40 uppercase tracking-widest">Source: {scheme.source}</span>
+                        <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-
-            <div className="flex flex-col gap-2 mt-2">
-              <p className="text-xs text-[#8A8A94]/80 leading-[1.8]">
-                Ask questions naturally.
-                <br />
-                Understand financial concepts.
-                <br />
-                Make more informed decisions.
-              </p>
-            </div>
+            ) : escalation ? (
+              <div className="flex flex-col gap-6">
+                <div className="size-12 rounded-full bg-amber-500/10 flex items-center justify-center border border-amber-500/20">
+                  <svg className="w-6 h-6 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-2xl font-semibold text-[#F5F5F7] tracking-tight">Escalation Created</h2>
+                  <p className="text-sm text-[#8A8A94] mt-2">A human expert will review your case.</p>
+                </div>
+                <div className="p-5 rounded-2xl bg-amber-500/5 border border-amber-500/10 flex flex-col gap-3">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] text-amber-500/60 uppercase tracking-widest">Reference ID</span>
+                    <span className="text-[16px] font-mono text-amber-400">{escalation.reference_id}</span>
+                  </div>
+                  <div className="flex flex-col mt-2">
+                    <span className="text-[10px] text-amber-500/60 uppercase tracking-widest">Issue Summary</span>
+                    <span className="text-[13px] text-amber-100/80 leading-relaxed">{escalation.summary}</span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-8">
+                <div>
+                  <h1 className="text-4xl font-semibold text-[#F5F5F7] tracking-tight leading-tight">
+                    FinVoice AI
+                  </h1>
+                  <p className="text-sm text-[#8A8A94] mt-2 leading-relaxed">
+                    Your premium financial
+                    <br />
+                    voice companion.
+                  </p>
+                </div>
+                <div className="h-px bg-white/[0.06]" />
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-xs text-[#8A8A94]/60 uppercase tracking-wider font-medium">Voice Active</span>
+                    <span className="text-sm text-[#F5F5F7] font-medium">{language}</span>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2 mt-2">
+                  <p className="text-xs text-[#8A8A94]/80 leading-[1.8]">
+                    Ask questions naturally.<br />
+                    Understand financial concepts.<br />
+                    Make more informed decisions.
+                  </p>
+                </div>
+              </div>
+            )}
           </motion.aside>
 
           {/* ─── Center: iPhone ─── */}
@@ -189,7 +284,7 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
               transition={{ duration: 1 }}
               className="absolute inset-[-60%] pointer-events-none z-0"
               style={{
-                background: `radial-gradient(ellipse at center, ${isSpeaking ? '#8B5CF640' : '#6366F130'}, transparent 60%)`,
+                background: `radial-gradient(ellipse at center, ${isSpeaking ? '#38bdf840' : '#0284c730'}, transparent 60%)`,
               }}
             />
 
@@ -207,7 +302,7 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
 
               <IPhone width={300} height={612}>
                 {micError ? (
-                  <div className="w-full h-full bg-[#050507] flex flex-col items-center justify-center p-6 text-center">
+                  <div className="w-full h-full bg-[#030712] flex flex-col items-center justify-center p-6 text-center">
                     <div className="size-12 rounded-full bg-red-500/10 flex items-center justify-center mb-4">
                       <svg className="w-6 h-6 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <line x1="12" y1="2" x2="12" y2="22" />
@@ -242,6 +337,30 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
             transition={{ duration: 0.8, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
             className="hidden lg:flex flex-col gap-8 w-[320px] shrink-0 bg-white/[0.02] border border-white/[0.05] backdrop-blur-xl rounded-3xl p-8"
           >
+            {/* Journey Progress (Application Readiness) */}
+            <div className="flex flex-col gap-4">
+              <div>
+                <span className="text-xs text-[#8A8A94]/60 uppercase tracking-[0.2em] font-medium">
+                  Journey Progress
+                </span>
+              </div>
+              <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-gradient-to-r from-sky-500 to-indigo-500 rounded-full transition-all duration-1000 ease-out" 
+                  style={{ width: `${journeyProgress}%` }} 
+                />
+              </div>
+              <div className="flex items-start gap-3 mt-1">
+                <div className="mt-1 size-1.5 rounded-full bg-sky-400 shrink-0 shadow-[0_0_8px_rgba(56,189,248,0.6)]" />
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-[#8A8A94]/60 uppercase tracking-wider">Next Best Action</span>
+                  <span className="text-[13px] text-[#F5F5F7] font-medium leading-snug mt-0.5">{nextAction}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="h-px bg-white/[0.06]" />
+
             <div>
               <span className="text-xs text-[#8A8A94]/60 uppercase tracking-[0.2em] font-medium">
                 Current Session
