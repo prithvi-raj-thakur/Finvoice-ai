@@ -2,5 +2,5 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "sh -c 'cd /app && uv run python src/agent.py download-files && uv run python -m uvicorn src.outbound_call_service:app --host 0.0.0.0 --port ${PORT:-8000} & cd /app && uv run python src/agent.py start'"
+startCommand = "sh start.sh"
 restartPolicyType = "on_failure"
