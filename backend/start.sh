@@ -1,5 +1,6 @@
 #!/bin/sh
 set -e
+export HF_HOME="/app/.cache/huggingface"
 
 echo "Running in directory: $(pwd)"
 cd /app || echo "Warning: /app directory not found, continuing in $(pwd)"

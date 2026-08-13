@@ -1,5 +1,6 @@
 [build]
 builder = "nixpacks"
+aptPackages = ["libgomp1"]
 
 [deploy]
 startCommand = "sh /app/start.sh"
