@@ -68,6 +68,23 @@ def init_db():
                 updated_at TIMESTAMP
             )
         """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS call_analytics (
+                id TEXT PRIMARY KEY,
+                call_id TEXT,
+                user_id TEXT,
+                started_at TIMESTAMP,
+                ended_at TIMESTAMP,
+                duration INTEGER,
+                channel TEXT,
+                outcome TEXT,
+                success_reason TEXT,
+                failure_reason TEXT,
+                language TEXT,
+                created_at TIMESTAMP
+            )
+        """)
     conn.close()
 
 def get_user(user_id: str):
@@ -277,6 +294,75 @@ def update_escalation_status(reference_id: str, status: str):
     """, (status, now, reference_id))
     conn.commit()
     conn.close()
+
+def create_call_analytics(call_id: str, user_id: str, channel: str = "browser", language: str = "en"):
+    conn = get_db()
+    cursor = conn.cursor()
+    now = datetime.now(timezone.utc)
+    cursor.execute("""
+        INSERT INTO call_analytics (
+            id, call_id, user_id, started_at, channel, outcome, language, created_at
+        ) VALUES (?, ?, ?, ?, ?, 'IN_PROGRESS', ?, ?)
+    """, (call_id, call_id, user_id, now, channel, language, now))
+    conn.commit()
+    conn.close()
+    return call_id
+
+def update_call_analytics(call_id: str, outcome: str, success_reason: str = None, failure_reason: str = None):
+    conn = get_db()
+    cursor = conn.cursor()
+    now = datetime.now(timezone.utc)
+    
+    # Calculate duration
+    cursor.execute("SELECT started_at FROM call_analytics WHERE id = ?", (call_id,))
+    row = cursor.fetchone()
+    duration = 0
+    if row and row['started_at']:
+        try:
+            started_at = datetime.fromisoformat(row['started_at'].replace('Z', '+00:00'))
+            duration = int((now - started_at).total_seconds())
+        except Exception as e:
+            logger.error(f"Error calculating duration: {e}")
+
+    cursor.execute("""
+        UPDATE call_analytics 
+        SET ended_at = ?, duration = ?, outcome = ?, success_reason = ?, failure_reason = ?
+        WHERE id = ?
+    """, (now, duration, outcome, success_reason, failure_reason, call_id))
+    conn.commit()
+    conn.close()
+
+def get_call_analytics_overview():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) as total FROM call_analytics WHERE outcome IN ('SUCCESS', 'FAILED')")
+    total = cursor.fetchone()['total']
+    
+    cursor.execute("SELECT COUNT(*) as success FROM call_analytics WHERE outcome = 'SUCCESS'")
+    success = cursor.fetchone()['success']
+    
+    cursor.execute("SELECT COUNT(*) as failed FROM call_analytics WHERE outcome = 'FAILED'")
+    failed = cursor.fetchone()['failed']
+    
+    conn.close()
+    return {
+        "total_calls": total,
+        "successful_calls": success,
+        "failed_calls": failed
+    }
+
+def get_recent_calls():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT call_id, started_at, duration, channel, outcome, success_reason, failure_reason 
+        FROM call_analytics 
+        WHERE outcome IN ('SUCCESS', 'FAILED')
+        ORDER BY started_at DESC LIMIT 50
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 # Initialize DB on import
 init_db()

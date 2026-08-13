@@ -208,6 +208,37 @@ FinVoice will escalate in two primary cases:
 
 ---
 
+## Day 8 — Call Analytics
+
+**Feature:** Call Intelligence Dashboard
+**Use Case:** FinVoice tracks every interaction to measure actual success against financial tasks rather than just simple call completions. A polished metrics dashboard helps operators monitor agent performance.
+
+### Success Criteria
+- **SUCCESS:** A call is marked successful when FinVoice completes the user's intended financial task (e.g. `eligibility_check_completed`, `human_escalation_created`).
+- **FAILED:** A call is marked failed if the user hangs up early (`user_hangup`), a required tool errors (`tool_failure`), or the conversation ends without completing the task (`incomplete_task`).
+
+### Architecture
+- **Call Lifecycle Logging:** When an agent connects, a call session record is inserted into SQLite (`call_analytics` table) with `outcome = IN_PROGRESS`.
+- **Outcome Determination:** Upon disconnection (`ctx.room.on("disconnected")`), the agent updates the record, calculating `duration`, and tracking the final `SUCCESS` or `FAILED` state based on context markers.
+- **Privacy Protections:** The analytics dashboard NEVER exposes sensitive financial data, full call transcripts, passwords, or PII. It strictly displays operational metrics.
+
+### Dashboard
+The Call Intelligence Dashboard is accessible at `/analytics`.
+It uses a Next.js frontend interacting with a Python API wrapper to aggregate:
+1. **Total Calls**, **Successful Calls**, **Failed Calls**, and **Success Rate**.
+2. **Visual Call Performance Indicators**.
+3. **Recent Call History** (displays time, duration, channel, outcome, and task type).
+
+**How to Test:**
+1. Start the backend and frontend.
+2. Visit **http://localhost:3000/analytics**. (Metrics should initially show zero).
+3. Start a voice call via the main FinVoice app.
+4. Ask: *"Can you check whether I may be eligible for this government scheme?"* Let the agent process it and end the call.
+5. Check the dashboard to see the **Successful Calls** metric increase. 
+6. Start another call and just say *"never mind"* and hang up. Check the dashboard to see **Failed Calls** increase.
+
+---
+
 ## Deploy
 
 Want to deploy this beyond localhost? You'll need to deploy **two services**: the backend agent and the frontend. Both must use the same LiveKit project.

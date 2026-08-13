@@ -63,6 +63,8 @@ class Assistant(Agent):
     def __init__(self, room: rtc.Room = None) -> None:
         super().__init__(instructions=SYSTEM_PROMPT)
         self.room = room
+        self.success_reason = None
+        self.failure_reason = None
 
     def _get_user_id(self):
         if self.room and self.room.remote_participants:
@@ -126,6 +128,7 @@ class Assistant(Agent):
     async def end_conversation(self, confirm: bool = True):
         """Use this tool to end the conversation and disconnect the call when the user explicitly confirms they want to end it."""
         logger.info("Ending conversation as requested by user.")
+        self.failure_reason = "user_hangup" # If not overridden by success later or before
         import asyncio
         if self.room:
             asyncio.create_task(self.room.disconnect())
@@ -165,9 +168,11 @@ class Assistant(Agent):
             # Return a tiny summary to the LLM so it doesn't bloat the context window
             scheme_count = len(results.get("schemes", []))
             scheme_names = ", ".join([s["name"] for s in results.get("schemes", [])])
+            self.success_reason = "eligibility_check_completed"
             return f"Found {scheme_count} schemes: {scheme_names}. The UI has been updated with full details. Tell the user you found these matches and give a VERY brief 30-word intro overall without explaining each one fully yet. Wait for them to ask for more details."
         except Exception as e:
             logger.error(f"Error checking schemes: {e}")
+            self.failure_reason = "tool_failure"
             return {"success": False, "error": "Service temporarily unavailable"}
 
     @function_tool
@@ -217,9 +222,11 @@ class Assistant(Agent):
                 }).encode('utf-8')
                 await self.room.local_participant.publish_data(payload)
 
+            self.success_reason = "human_escalation_created"
             return f"Success. Escalate reference ID is {reference_id}. Tell the user exactly: 'Your support request has been created. Your reference number is {reference_id}. A support representative can review the request through the support system.'"
         except Exception as e:
             logger.error(f"Error creating escalation: {e}")
+            self.failure_reason = "tool_failure"
             return "Failed to create escalation. Tell the user: 'I'm unable to create the support request right now. Please try again later.'"
 
 
@@ -285,8 +292,9 @@ async def my_agent(ctx: JobContext):
     # await avatar.start(session, room=ctx.room)
 
     # Start the session, which initializes the voice pipeline and warms up the models
+    assistant = Assistant(room=ctx.room)
     await session.start(
-        agent=Assistant(room=ctx.room),
+        agent=assistant,
         room=ctx.room
     )
 
@@ -330,6 +338,42 @@ If the user says "stop", "don't call me", or asks to opt out, apologize briefly 
 
     # Join the room and connect to the user
     await ctx.connect()
+    
+    # Initialize Analytics
+    call_id = ctx.room.name
+    channel = "browser"
+    
+    # Check if there are any SIP participants immediately available
+    for participant in ctx.room.remote_participants.values():
+        if (participant.identity and participant.identity.startswith("sip")) or getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+            channel = "twilio"
+            break
+
+    try:
+        user_id = assistant._get_user_id()
+        database.create_call_analytics(call_id=call_id, user_id=user_id, channel=channel)
+    except Exception as e:
+        logger.error(f"Failed to create call analytics: {e}")
+
+    @ctx.room.on("disconnected")
+    def on_disconnected(*args, **kwargs):
+        logger.info(f"Room {ctx.room.name} disconnected. Updating analytics.")
+        try:
+            if assistant.success_reason:
+                outcome = "SUCCESS"
+                failure_reason = None
+            else:
+                outcome = "FAILED"
+                failure_reason = assistant.failure_reason or "incomplete_task"
+                
+            database.update_call_analytics(
+                call_id=call_id,
+                outcome=outcome,
+                success_reason=assistant.success_reason,
+                failure_reason=failure_reason
+            )
+        except Exception as e:
+            logger.error(f"Failed to update call analytics on disconnect: {e}")
 
     # Greet any SIP participants already in the room
     import asyncio
