@@ -2,5 +2,5 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "sh start.sh"
+startCommand = "sh /app/start.sh"
 restartPolicyType = "on_failure"
