@@ -7,7 +7,7 @@ import { cn } from '@/lib/shadcn/utils';
 export const OutboundCallSection = () => {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [reason, setReason] = useState('Scheme Follow-up');
-  const [status, setStatus] = useState<'ready' | 'calling' | 'ringing' | 'connected' | 'completed' | 'failed' | 'no_answer' | 'busy'>('ready');
+  const [status, setStatus] = useState<'ready' | 'calling' | 'ringing' | 'connected' | 'completed' | 'failed' | 'no_answer' | 'busy' | 'opted_out'>('ready');
   const [isHovered, setIsHovered] = useState(false);
 
   const handleCall = async () => {

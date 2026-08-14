@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
-import { motion, LayoutGroup } from 'motion/react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { motion, LayoutGroup, AnimatePresence } from 'motion/react';
 import Link from 'next/link';
 import {
   useVoiceAssistant,
@@ -22,6 +22,17 @@ import dynamic from 'next/dynamic';
 
 const GradientWaves = dynamic(() => import('@/components/site/Hero'), { ssr: false });
 
+type AgentType = 'main' | 'scheme' | 'fraud' | 'literacy' | 'document' | 'application';
+
+const AGENT_INFO: Record<AgentType, { title: string; subtitle: string; visualizer: VisualizerType }> = {
+  main: { title: 'FinVoice AI', subtitle: 'Your premium financial voice companion.', visualizer: 'aura' },
+  scheme: { title: 'Scheme Specialist', subtitle: 'Dedicated Government Schemes Expert.', visualizer: 'wave' },
+  fraud: { title: 'Fraud & Safety', subtitle: 'Financial Security & Fraud Protection.', visualizer: 'radial' },
+  literacy: { title: 'Financial Literacy', subtitle: 'Simple Financial Explanations.', visualizer: 'bar' },
+  document: { title: 'Document Guide', subtitle: 'Document Preparation & Checklists.', visualizer: 'grid' },
+  application: { title: 'Application Assistant', subtitle: 'Step-by-Step Application Guide.', visualizer: 'wave' },
+};
+
 interface FinvoiceSessionViewProps {
   onBack?: () => void;
 }
@@ -41,6 +52,33 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
   const [journeyProgress, setJourneyProgress] = useState(15);
   const [nextAction, setNextAction] = useState("Explain your financial situation");
 
+  // Multi-Agent State
+  const [activeAgent, setActiveAgent] = useState<AgentType>('main');
+  const [nextAgent, setNextAgent] = useState<AgentType | null>('main');
+  const [isTransitioning, setIsTransitioning] = useState(true);
+  const [handoffContext, setHandoffContext] = useState('');
+
+  // Play sound on initial mount (when main agent starts)
+  useEffect(() => {
+    const audio = new Audio('/sounds/bot-change.mp3');
+    audio.play().catch(e => console.log('Audio playback failed:', e));
+    
+    // Clear initial transition after 6 seconds
+    const timer = setTimeout(() => {
+      setIsTransitioning(false);
+      setNextAgent(null);
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Play sound during handoffs
+  useEffect(() => {
+    if (isTransitioning) {
+      const audio = new Audio('/sounds/bot-change.mp3');
+      audio.play().catch(e => console.log('Audio playback failed:', e));
+    }
+  }, [isTransitioning]);
+
   useDataChannel((msg) => {
     if (msg.payload) {
       try {
@@ -54,6 +92,27 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
           setEscalation(parsed.data);
           setJourneyProgress(100);
           setNextAction("Wait for human follow-up");
+        } else if (parsed.type === 'agent_handoff') {
+          // Start transition immediately
+          setIsTransitioning(true);
+          const target = parsed.data.to as AgentType;
+          
+          setNextAgent(target);
+          setHandoffContext(parsed.data.context || '');
+          setVisualizerType(AGENT_INFO[target]?.visualizer || 'aura');
+
+          // Clear schemes and reset progress if we leave the Scheme Specialist
+          if (target !== 'scheme') {
+            setSchemes([]);
+            setJourneyProgress(15);
+            setNextAction("Explain your financial situation");
+          }
+
+          setTimeout(() => {
+            setActiveAgent(target);
+            setNextAgent(null);
+            setIsTransitioning(false);
+          }, 6000); // Wait for the beautiful transition animation and sound to complete
         }
       } catch (e) {}
     }
@@ -63,7 +122,7 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
   const isListening = agentState === 'listening';
 
   // Determine language display (static for now since no detection API)
-  const language = 'Hindi + English';
+  const language = 'Multi-lingual';
 
   // Ambient glow intensity based on state
   const glowOpacity = useMemo(() => {
@@ -83,6 +142,64 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
     <LayoutGroup>
       <div className="fixed inset-0 bg-[#030712] flex flex-col items-center justify-center overflow-hidden z-50">
         
+        {/* ─── HANDOFF TRANSITION OVERLAY ─── */}
+        <AnimatePresence>
+          {isTransitioning && nextAgent && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+              className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-[#030712]/80 backdrop-blur-3xl overflow-hidden"
+            >
+              <motion.div
+                initial={{ scale: 0.8, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 1.1, opacity: 0 }}
+                transition={{ duration: 1.2, ease: "easeOut" }}
+                className="relative flex flex-col items-center"
+              >
+                <div className="absolute inset-0 rounded-full blur-[100px] bg-gradient-to-tr from-sky-500/40 to-indigo-500/40 w-[300px] h-[300px] -z-10" />
+                
+                <div className="size-20 rounded-full border border-white/10 bg-white/5 flex items-center justify-center mb-8 relative overflow-hidden">
+                  <motion.div 
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+                    className="absolute inset-[-50%] bg-[conic-gradient(from_0deg,transparent_0_340deg,rgba(255,255,255,0.8)_360deg)]"
+                  />
+                  <div className="absolute inset-1 rounded-full bg-[#030712] flex items-center justify-center">
+                    <svg className="w-8 h-8 text-sky-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                    </svg>
+                  </div>
+                </div>
+
+                <motion.h2 
+                  initial={{ y: 20, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  transition={{ delay: 0.3, duration: 0.8 }}
+                  className="text-2xl font-semibold text-white tracking-tight mb-3 text-center"
+                >
+                  {nextAgent === 'main' 
+                    ? (activeAgent === 'main' && isTransitioning ? 'Connecting to FinVoice AI...' : 'Returning to Main Assistant...') 
+                    : `Connecting to ${AGENT_INFO[nextAgent]?.title}...`}
+                </motion.h2>
+                
+                <motion.p
+                  initial={{ y: 20, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  transition={{ delay: 0.5, duration: 0.8 }}
+                  className="text-sm text-[#8A8A94] max-w-sm text-center leading-relaxed"
+                >
+                  {nextAgent === 'main' && activeAgent === 'main' && isTransitioning
+                    ? "Initializing secure financial environment..."
+                    : "Passing secure conversation context to ensure a seamless continuation of your journey."}
+                </motion.p>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* ─── NEW GRADIENT WAVES BACKGROUND ─── */}
         <div className="absolute inset-0 w-full h-full z-0 opacity-60 pointer-events-none">
           <GradientWaves
@@ -130,7 +247,7 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
                 </svg>
               </button>
             )}
-            <div className="flex items-center gap-2 hidden sm:flex">
+            <div className="flex items-center gap-2">
               <div className="size-6 rounded-lg bg-gradient-to-br from-[#38bdf8] to-[#0284c7] flex items-center justify-center">
                 <svg className="w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
@@ -138,17 +255,34 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
                 </svg>
               </div>
               <span className="text-[13px] font-semibold text-[#F5F5F7] tracking-tight">
-                FinVoice AI
+                {activeAgent === 'main' ? 'FinVoice AI' : AGENT_INFO[activeAgent]?.title}
               </span>
             </div>
           </div>
 
           {/* Center Indicator */}
-          <div className="hidden md:flex items-center gap-2 absolute left-1/2 -translate-x-1/2">
-            <div className="size-1.5 rounded-full bg-[#38bdf8] animate-pulse" />
-            <span className="text-[11px] font-medium text-[#F5F5F7] tracking-wider uppercase">
-              Live Session
-            </span>
+          <div className="hidden md:flex flex-col items-center gap-1 absolute left-1/2 -translate-x-1/2">
+            <div className="flex items-center gap-2">
+              <div className="size-1.5 rounded-full bg-[#38bdf8] animate-pulse" />
+              <span className="text-[11px] font-medium text-[#F5F5F7] tracking-wider uppercase">
+                Live Session
+              </span>
+            </div>
+            {/* Visual Agent Network Indicator */}
+            <div className="flex items-center gap-2 opacity-60">
+              <span className="text-[9px] font-medium text-[#8A8A94] tracking-widest uppercase">CORE</span>
+              {activeAgent !== 'main' && (
+                <>
+                  <svg className="w-3 h-3 text-[#38bdf8]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                  </svg>
+                  <span className="text-[9px] font-bold text-[#38bdf8] tracking-widest uppercase flex items-center gap-1.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#38bdf8] animate-pulse" />
+                    {AGENT_INFO[activeAgent]?.title}
+                  </span>
+                </>
+              )}
+            </div>
           </div>
 
           {/* Language selector & Memory Indicator */}
@@ -242,15 +376,30 @@ export function FinvoiceSessionView({ onBack }: FinvoiceSessionViewProps) {
               <div className="flex flex-col gap-8">
                 <div>
                   <h1 className="text-4xl font-semibold text-[#F5F5F7] tracking-tight leading-tight">
-                    FinVoice AI
+                    {AGENT_INFO[activeAgent]?.title}
                   </h1>
                   <p className="text-sm text-[#8A8A94] mt-2 leading-relaxed">
-                    Your premium financial
-                    <br />
-                    voice companion.
+                    {AGENT_INFO[activeAgent]?.subtitle}
                   </p>
                 </div>
                 <div className="h-px bg-white/[0.06]" />
+                
+                {activeAgent !== 'main' && handoffContext && (
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center gap-2">
+                      <div className="size-6 rounded-full bg-indigo-500/20 flex items-center justify-center">
+                        <svg className="w-3.5 h-3.5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      </div>
+                      <span className="text-xs text-[#8A8A94]/80 uppercase tracking-wider font-medium">Context Received</span>
+                    </div>
+                    <p className="text-xs text-[#F5F5F7]/80 leading-relaxed p-3 bg-white/[0.03] rounded-xl border border-white/[0.05]">
+                      "{handoffContext}"
+                    </p>
+                    <div className="h-px bg-white/[0.06] mt-4" />
+                  </div>
+                )}
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-1.5">
                     <span className="text-xs text-[#8A8A94]/60 uppercase tracking-wider font-medium">Voice Active</span>

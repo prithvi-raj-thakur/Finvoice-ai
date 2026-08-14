@@ -65,6 +65,22 @@ export function AgentChatTranscript({
           const cleanMessage = message.replace(/<function=[\s\S]*?(?:<\/function>|$)/gi, '').trim();
           if (!cleanMessage) return null;
 
+          // Intercept system messages for handoff transitions
+          if (cleanMessage.startsWith('[SYSTEM:')) {
+            const match = cleanMessage.match(/You are now the ([^.]+)/);
+            const agentName = match ? match[1].replace(' again', '') : 'Specialist';
+            const systemText = `Agent Connected: ${agentName}`;
+            return (
+              <div key={id} className="flex items-center justify-center my-6 gap-3 opacity-80">
+                <div className="h-px w-full bg-gradient-to-r from-transparent to-sky-500/40" />
+                <span className="text-[10px] text-sky-400 font-semibold uppercase tracking-[0.2em] whitespace-nowrap px-2">
+                  {systemText}
+                </span>
+                <div className="h-px w-full bg-gradient-to-l from-transparent to-sky-500/40" />
+              </div>
+            );
+          }
+
           return (
             <Message key={id} title={title} from={messageOrigin}>
               <MessageContent>

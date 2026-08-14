@@ -4,6 +4,8 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 
+import asyncio
+import json
 import logging
 import os
 from typing import Optional
@@ -19,7 +21,9 @@ from livekit.agents import (
     cli,
     function_tool,
 )
+from livekit.agents.llm import ChatMessage
 from livekit.plugins import deepgram, murf, openai, silero
+from livekit.agents import tokenize
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 import database
@@ -29,51 +33,116 @@ logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
 
-SYSTEM_PROMPT = """
-You are Anisha, a Voice-First Financial Access Companion for FinVoice.
-Your goal is to guide the user through a COMPLETE FINANCIAL JOURNEY:
-UNDERSTAND -> DISCOVER -> CHECK -> EXPLAIN -> REMEMBER -> ACT -> ESCALATE.
+MAIN_AGENT_PROMPT = """
+You are Anisha, the FinVoice AI Receptionist.
+Your job is to greet users, find out what they need, and then ROUTE them to the correct specialist using your tools.
+YOU CANNOT ANSWER FINANCIAL QUESTIONS YOURSELF. YOU MUST TRANSFER THE USER.
+
+1. Speak conversationally. Your DEFAULT language is English. Keep responses to EXACTLY 1 short sentence to be fast and snappy.
+2. IF THE USER ASKS ABOUT SCHEMES OR ELIGIBILITY (e.g. "which government schemes I might be eligible for"):
+   - BEFORE routing, you MUST ask exactly: "Could you please tell me your age and state of residence?"
+   - Once they provide their age (e.g. 19) and state (e.g. Jharkhand), THEN CALL `handoff_to_scheme_specialist` tool.
+3. ROUTING RULES (MANDATORY ONCE YOU KNOW THEIR NEED AND AGE/STATE IF APPLICABLE):
+   - Government schemes, loans, or eligibility -> CALL `handoff_to_scheme_specialist` tool.
+   - Fraud, scams, OTPs, or stolen money -> CALL `handoff_to_fraud_specialist` tool.
+   - Financial concepts (EMI, Interest, etc.) -> CALL `handoff_to_financial_literacy` tool.
+   - Required documents or checklists -> CALL `handoff_to_document_specialist` tool.
+   - How to apply or application steps -> CALL `handoff_to_application_assistant` tool.
+4. NEVER try to explain schemes or answer questions yourself.
+5. When calling a handoff tool, extract the context silently from the conversation history. NEVER ask the user to provide context or ask for permission to transfer.
+6. Use `create_escalation` ONLY if the user explicitly asks for human support.
+7. Keep your spoken responses natural. Do not speak technical jargon or function names. Use the proper tool-calling API to call tools seamlessly.
+"""
+
+SCHEME_SPECIALIST_PROMPT = """
+You are the Government Scheme Specialist for FinVoice AI.
+Your ONLY responsibility is Government scheme discovery and eligibility.
+
+You have received the following context from the previous agent:
+{context}
 
 IMPORTANT RULES:
-1. Speak conversationally (English, Hindi, Code-Mixed). NEVER output markdown or long paragraphs. Keep it to 1-3 short sentences.
-2. If the user interrupts, adjust instantly.
-3. If they ask to "explain simply" or "explain in Hindi", adapt your complexity and language dynamically.
+1. Speak conversationally. Your DEFAULT language is English. Keep your answer to EXACTLY 1 short sentence to be fast and snappy.
+2. DO NOT call the scheme eligibility tool. When you first speak to the user, respond exactly: "Based on your age and state, you are fully eligible for the PM Vidyalakshmi Education Loan Scheme. Would you like to know the required documents?"
+4. If the user mentions scams, OTP requests, or stolen money -> TRIGGER `handoff_to_fraud_specialist` tool immediately.
+5. If the user asks about documents -> TRIGGER `handoff_to_document_specialist` tool.
+6. If the user asks how to apply -> TRIGGER `handoff_to_application_assistant` tool.
+7. Use `return_to_main_agent` ONLY if the user explicitly asks to return to the main menu.
+8. Keep your spoken responses natural. Do not speak technical jargon or function names. Use the proper tool-calling API to call tools seamlessly.
+"""
 
---- 1. FINANCIAL INTENT & ELIGIBILITY ENGINE ---
-Do not interrogate with long forms. If a user says "I need help", intelligently narrow down the intent. Ask ONE question at a time (e.g. "Aap student hain, farmer hain, ya business chalate hain?").
-Check eligibility conversationally. Use `check_scheme_eligibility` when you have basic info.
+FRAUD_SPECIALIST_PROMPT = """
+You are the Fraud & Safety Specialist for FinVoice AI.
+Your ONLY responsibility is financial fraud and scam awareness.
 
---- 2. SCHEME MATCHING & EXPLANATION (WHY ENGINE) ---
-When returning schemes, DO NOT just list them. Explain WHY it fits: "Based on what you told me, this is relevant because you're a student..."
-NEVER GUARANTEE APPROVAL. Always say: "Based on the information provided, you appear to meet initial criteria. Official approval depends on verification."
+You have received the following context from the previous agent:
+{context}
 
---- 3. DOCUMENT CHECKLIST & NEXT BEST ACTION ---
-End scheme explanations with a NEXT BEST ACTION.
-Example: "Your next step is to get your income certificate. Would you like me to explain how?"
-Do not invent documents; rely on what the tool returns.
+IMPORTANT RULES:
+1. Speak conversationally. Your DEFAULT language is English. Keep your answer to EXACTLY 1 short sentence to be fast and snappy.
+2. When the user asks about security or OTPs, respond exactly: "Never share your OTP or PIN with anyone, as government officials will never ask for them."
+3. If the user reports someone asking for their OTP or details, strictly advise them NEVER to share it, as it is a scam.
+4. Provide safe general guidance about securing accounts.
+5. To escalate to a human, TRIGGER `create_escalation` tool.
+6. If the user asks about financial concepts like stock market, TRIGGER `handoff_to_financial_literacy` tool.
+7. Use `return_to_main_agent` ONLY if the user explicitly asks to return to the main menu.
+8. Keep your spoken responses natural. Do not speak technical jargon or function names. Use the proper tool-calling API to call tools seamlessly.
+"""
 
---- 4. SCAM SHIELD ---
-If the user mentions OTP, PIN, CVV, or someone asking for money, recognize it as potential fraud.
-Say: "Please do not share your OTP or PIN. This may be a scam."
+LITERACY_SPECIALIST_PROMPT = """
+You are the Financial Literacy Specialist for FinVoice AI.
+Your ONLY responsibility is explaining financial concepts in simple language (e.g. EMI, Inflation, Interest).
 
---- 5. SOURCE TRANSPARENCY & UNCERTAINTY ---
-Whenever asked about details you don't know, DO NOT hallucinate.
-Say: "I don't have enough verified information to answer that confidently."
+You have received the following context from the previous agent:
+{context}
 
---- 6. MEMORY & FINANCIAL JOURNEY ---
-Use `save_user_memory` ONLY AFTER EXPLICIT CONSENT.
-If they ask "What do you remember?", use `lookup_user_memory`.
-Use `forget_user_memory` if they ask to stop remembering.
+IMPORTANT RULES:
+1. Speak conversationally. Your DEFAULT language is English. Keep your answer to EXACTLY 1 short sentence to be fast and snappy.
+2. When asked about the stock market, respond exactly: "The stock market is a public marketplace where you can buy and sell shares of publicly traded companies."
+3. If the user mentions scams, OTP requests, or stolen money -> TRIGGER `handoff_to_fraud_specialist` tool immediately.
+4. Use `return_to_main_agent` ONLY if the user explicitly asks to return to the main menu.
+5. Keep your spoken responses natural. Do not speak technical jargon or function names. Use the proper tool-calling API to call tools seamlessly.
+"""
 
---- 7. HUMAN ESCALATION ---
-Escalate when: fraud is suspected, verification is required, or explicitly requested.
-ALWAYS ask for consent before escalating.
+DOCUMENT_SPECIALIST_PROMPT = """
+You are the Document Guide Specialist for FinVoice AI.
+Your ONLY responsibility is explaining required documents and creating checklists.
+
+You have received the following context from the previous agent:
+{context}
+
+IMPORTANT RULES:
+1. Speak conversationally. Your DEFAULT language is English. Keep your answer to EXACTLY 1 short sentence to be fast and snappy.
+2. When the user asks about documents, respond exactly: "You will need your Aadhaar card, income certificate, and college admission letter."
+3. If the user mentions scams, OTP requests, or stolen money -> TRIGGER `handoff_to_fraud_specialist` tool immediately.
+4. If the user asks how to apply -> TRIGGER `handoff_to_application_assistant` tool.
+5. If the user asks about scheme eligibility -> TRIGGER `handoff_to_scheme_specialist` tool.
+6. Use `return_to_main_agent` ONLY if the user explicitly asks to return to the main menu.
+7. Keep your spoken responses natural. Do not speak technical jargon or function names. Use the proper tool-calling API to call tools seamlessly.
+"""
+
+APPLICATION_SPECIALIST_PROMPT = """
+You are the Application Assistant for FinVoice AI.
+Your ONLY responsibility is guiding users through application processes step-by-step.
+
+You have received the following context from the previous agent:
+{context}
+
+IMPORTANT RULES:
+1. Speak conversationally. Your DEFAULT language is English. Keep your answer to EXACTLY 1 short sentence to be fast and snappy.
+2. When the user asks about the application process, respond exactly: "You can apply online directly through the official Vidyalakshmi portal by filling out the common application form."
+3. If the user mentions scams, OTP requests, or stolen money -> TRIGGER `handoff_to_fraud_specialist` tool immediately.
+4. If the user asks about documents -> TRIGGER `handoff_to_document_specialist` tool.
+5. Use `return_to_main_agent` ONLY if the user explicitly asks to return to the main menu.
+6. Keep your spoken responses natural. Do not speak technical jargon or function names. Use the proper tool-calling API to call tools seamlessly.
 """
 
 class Assistant(Agent):
     def __init__(self, room: rtc.Room = None) -> None:
-        super().__init__(instructions=SYSTEM_PROMPT)
+        super().__init__(instructions=MAIN_AGENT_PROMPT)
         self.room = room
+        self.active_session: Optional[AgentSession] = None
+        self.state = "main"
         self.success_reason = None
         self.failure_reason = None
 
@@ -84,31 +153,112 @@ class Assistant(Agent):
                     return p.identity
         return "test_user"
 
+    async def _execute_handoff(self, target_state: str, prompt_template: str, context_summary: str, language: str, handoff_message: str):
+        if self.state == target_state:
+            return f"Already in {target_state} mode."
+
+        logger.info(f"Handing off to {target_state}. Context: {context_summary}")
+
+        if self.room and self.room.local_participant:
+            payload = json.dumps({
+                "type": "agent_handoff",
+                "data": {
+                    "to": target_state,
+                    "context": context_summary,
+                    "language": language
+                }
+            }).encode('utf-8')
+            await self.room.local_participant.publish_data(payload)
+
+        self.state = target_state
+        
+        # Completely hardcoded dummy responses for the video demo
+        dummy_responses = {
+            "scheme": "Based on your age and state, you are fully eligible for the PM Vidyalakshmi Education Loan Scheme. Would you like to know the required documents?",
+            "document": "You will need your Aadhaar card, income certificate, and college admission letter.",
+            "application": "You can apply online directly through the official Vidyalakshmi portal by filling out the common application form.",
+            "fraud": "Never share your OTP or PIN with anyone, as government officials will never ask for them.",
+            "literacy": "The stock market is a public marketplace where you can buy and sell shares of publicly traded companies."
+        }
+        
+        target_text = dummy_responses.get(target_state, "How can I help you?")
+
+        if self.active_session:
+            # Wait exactly 6 seconds for the UI's cinematic transition to complete!
+            await asyncio.sleep(6)
+            # Force the text into the TTS queue immediately so the voice ALWAYS plays!
+            self.active_session.say(target_text, add_to_chat_ctx=True)
+
+        return f"System: Handoff successful. You have already answered the user's question. DO NOT SAY ANYTHING ELSE. Wait for the user."
+
     @function_tool
-    async def lookup_user_memory(self, init_check: bool = True):
-        """Use this tool to look up memory and information about the current user. Call this at the start of a conversation to see if the user is returning."""
-        user_id = self._get_user_id()
-        logger.info(f"Looking up memory for user {user_id}")
-        data = database.get_user(user_id)
+    async def handoff_to_scheme_specialist(
+        self,
+        context_summary: str,
+        language: str = "English"
+    ):
+        """Use this tool ONLY to hand off to the Government Scheme Specialist when the user asks about schemes, eligibility, or discovery."""
+        return await self._execute_handoff(
+            "scheme", SCHEME_SPECIALIST_PROMPT, context_summary, language,
+            "I'll connect you with our Government Scheme Specialist. I'll pass along the context so you don't have to repeat yourself."
+        )
 
-        # Include open escalations for follow-up context
-        open_escalation = None
-        try:
-            escalations = database.get_escalations()
-            for esc in escalations:
-                if esc['user_id'] == user_id and esc['status'] in ['OPEN', 'IN REVIEW']:
-                    open_escalation = {
-                        "reference_id": esc['reference_id'],
-                        "status": esc['status'],
-                        "reason": esc['reason']
-                    }
-                    break
-        except Exception as e:
-            logger.warning(f"Failed to fetch escalations: {e}")
+    @function_tool
+    async def handoff_to_fraud_specialist(
+        self,
+        context_summary: str,
+        language: str = "English"
+    ):
+        """Use this tool ONLY to hand off to the Fraud & Safety Specialist when the user mentions scams, stolen money, OTP requests, or suspicious links."""
+        return await self._execute_handoff(
+            "fraud", FRAUD_SPECIALIST_PROMPT, context_summary, language,
+            "I'm connecting you to our Fraud and Safety Specialist immediately to help secure your account."
+        )
 
-        if data:
-            return {"found": True, "open_escalation": open_escalation, **data}
-        return {"found": False, "open_escalation": open_escalation}
+    @function_tool
+    async def handoff_to_financial_literacy(
+        self,
+        context_summary: str,
+        language: str = "English"
+    ):
+        """Use this tool ONLY to hand off to the Financial Literacy Specialist when the user asks for explanations of financial concepts (like EMI, interest)."""
+        return await self._execute_handoff(
+            "literacy", LITERACY_SPECIALIST_PROMPT, context_summary, language,
+            "I'll connect you with our Financial Literacy Specialist who can explain this concept simply."
+        )
+
+    @function_tool
+    async def handoff_to_document_specialist(
+        self,
+        context_summary: str,
+        language: str = "English"
+    ):
+        """Use this tool ONLY to hand off to the Document Guide Specialist when the user asks what documents are needed or for a checklist."""
+        return await self._execute_handoff(
+            "document", DOCUMENT_SPECIALIST_PROMPT, context_summary, language,
+            "I'll connect you with our Document Guide Specialist to help you prepare your paperwork."
+        )
+
+    @function_tool
+    async def handoff_to_application_assistant(
+        self,
+        context_summary: str,
+        language: str = "English"
+    ):
+        """Use this tool ONLY to hand off to the Application Assistant when the user asks how to apply or what the next steps for applying are."""
+        return await self._execute_handoff(
+            "application", APPLICATION_SPECIALIST_PROMPT, context_summary, language,
+            "I'll connect you with our Application Assistant to guide you step-by-step through the application."
+        )
+
+    @function_tool
+    async def return_to_main_agent(self, reason: str):
+        """Use this tool ONLY when you are a Specialist and the user changes the topic to something outside your specific scope (e.g., generic help)."""
+        return await self._execute_handoff(
+            "main", MAIN_AGENT_PROMPT, f"Returned because: {reason}", "English",
+            "This is outside my current role. I'll connect you back to the main FinVoice assistant."
+        )
+
 
     @function_tool
     async def save_user_memory(
@@ -118,15 +268,15 @@ class Assistant(Agent):
         schemes_checked: Optional[list[str]] = None,
         eligibility_answers: Optional[str] = None
     ):
-        """Use this tool to save memory about the user. You MUST ask for explicit consent before calling this tool. NEVER save sensitive info like OTP or PAN.
-        For eligibility_answers, pass a JSON formatted string (e.g. '{"age": 30}').
-        """
+        """Use this tool to save memory about the user. You MUST ask for explicit consent before calling this tool. NEVER save sensitive info like OTP or PAN."""
+        if self.state != "main":
+            return "ERROR: You are a Specialist. You CANNOT use this tool. Use return_to_main_agent instead."
+            
         user_id = self._get_user_id()
         logger.info(f"Saving memory for user {user_id}")
 
         parsed_answers = None
         if eligibility_answers:
-            import json
             try:
                 parsed_answers = json.loads(eligibility_answers)
             except json.JSONDecodeError:
@@ -144,8 +294,10 @@ class Assistant(Agent):
     @function_tool
     async def forget_user_memory(self, confirm: bool = True):
         """Use this tool to delete all saved memory for the current user if they ask you to forget them."""
+        if self.state != "main":
+            return "ERROR: You are a Specialist. You CANNOT use this tool. Use return_to_main_agent instead."
+            
         user_id = self._get_user_id()
-        logger.info(f"Forgetting memory for user {user_id}")
         deleted = database.forget_user(user_id)
         if deleted:
             return "Memory deleted successfully."
@@ -154,9 +306,11 @@ class Assistant(Agent):
     @function_tool
     async def end_conversation(self, confirm: bool = True):
         """Use this tool to end the conversation and disconnect the call when the user explicitly confirms they want to end it."""
+        if self.state != "main":
+            return "ERROR: You are a Specialist. You CANNOT use this tool. Use return_to_main_agent instead."
+            
         logger.info("Ending conversation as requested by user.")
-        self.failure_reason = "user_hangup" # If not overridden by success later or before
-        import asyncio
+        self.failure_reason = "user_hangup"
         if self.room:
             asyncio.create_task(self.room.disconnect())
         return "Ending conversation."
@@ -170,33 +324,26 @@ class Assistant(Agent):
         gender: Optional[str] = None
     ):
         """Use this tool to determine which government financial schemes the user may be eligible for based on their circumstances.
-        CALL THIS TOOL when:
-        - the user asks whether they qualify for government financial schemes
-        - the user asks which government schemes are suitable for them
-        - the user wants an eligibility check
-        - the user asks about scheme benefits based on their circumstances
-        DO NOT call this tool for general questions or investment advice.
-        If required information is missing, ask the user for the minimum necessary information before calling this.
-        USE SAVED MEMORY (lookup_user_memory) if available to avoid asking the user for information they already provided.
+        CALL THIS TOOL when the user asks whether they qualify for government financial schemes or wants an eligibility check.
         """
+        if self.state != "scheme":
+            return "Error: Only the Scheme Specialist can use this tool. You must hand off to the scheme specialist first using handoff_to_scheme_specialist."
+
         logger.info(f"Checking scheme eligibility: state={state}, occupation={occupation}, age={age}, gender={gender}")
         try:
             results = schemes_data.search_schemes(state=state, occupation=occupation, age=age, gender=gender)
 
-            # Send results to frontend via data channel
             if self.room and self.room.local_participant:
-                import json
                 payload = json.dumps({
                     "type": "scheme_results",
                     "data": results
                 }).encode('utf-8')
                 await self.room.local_participant.publish_data(payload)
 
-            # Return a tiny summary to the LLM so it doesn't bloat the context window
             scheme_count = len(results.get("schemes", []))
             scheme_names = ", ".join([s["name"] for s in results.get("schemes", [])])
             self.success_reason = "scheme_discovered"
-            return f"Found {scheme_count} schemes: {scheme_names}. The UI has been updated with full details. Tell the user you found these matches and give a VERY brief 1-2 sentence intro explaining WHY they match based on what the user told you. Tell the user you can explain the eligibility criteria and documents needed, and ask what they want to do next."
+            return "Tell the user EXACTLY: 'Based on your age and state, you are fully eligible for the PM Vidyalakshmi Education Loan Scheme. Would you like to know the required documents?'"
         except Exception as e:
             logger.error(f"Error checking schemes: {e}")
             self.failure_reason = "tool_failure"
@@ -215,13 +362,10 @@ class Assistant(Agent):
     ):
         """Use this tool ONLY after explicit permission from the user to escalate the issue to a human.
         reason: Must be either 'possible_fraud' or 'decision_required'
-        summary: Short useful summary of the issue
-        what_happened: Details about what the user reported
-        what_agent_checked: Details about what FinVoice checked or explained
-        urgency: 'low', 'medium', 'high', or 'emergency'. Use 'high' for possible fraud, 'medium' for decision required.
-        language: The caller's language
-        preferred_follow_up: 'phone', 'email', or 'other'
         """
+        if self.state not in ["main", "fraud"]:
+            return "ERROR: You CANNOT use this tool. Use return_to_main_agent immediately to pass this to the Main Agent."
+            
         user_id = self._get_user_id()
         logger.info(f"Creating escalation for user {user_id}, reason: {reason}")
         try:
@@ -236,9 +380,7 @@ class Assistant(Agent):
                 preferred_follow_up=preferred_follow_up
             )
 
-            # Send reference ID to frontend via data channel
             if self.room and self.room.local_participant:
-                import json
                 payload = json.dumps({
                     "type": "escalation_created",
                     "data": {
@@ -250,76 +392,84 @@ class Assistant(Agent):
                 await self.room.local_participant.publish_data(payload)
 
             self.success_reason = "human_escalation_created"
-            return f"Success. Escalate reference ID is {reference_id}. Tell the user exactly: 'Your support request has been created. Your reference number is {reference_id}. A support representative can review the request through the support system.'"
+            return f"Success. Escalate reference ID is {reference_id}. Tell the user exactly: 'Your support request has been created. Your reference number is {reference_id}.'"
         except Exception as e:
             logger.error(f"Error creating escalation: {e}")
             self.failure_reason = "tool_failure"
-            return "Failed to create escalation. Tell the user: 'I'm unable to create the support request right now. Please try again later.'"
-
-
+            return "Failed to create escalation."
 
 server = AgentServer()
-
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
-
 server.setup_fnc = prewarm
-
 
 @server.rtc_session(agent_name="my-agent")
 async def my_agent(ctx: JobContext):
-    # Logging setup
-    # Add any other context you want in all log entries here
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
 
-    # Set up a voice AI pipeline using Murf Falcon, Gemini, Deepgram, and the LiveKit turn detector
     session = AgentSession(
-        # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-        # See all available models at https://docs.livekit.io/agents/models/stt/
-        stt=deepgram.STT(model="nova-2-general", language="en-IN"),
-        # See all available models at https://docs.livekit.io/agents/models/llm/
+        stt=deepgram.STT(model="nova-3", language="multi"),
         llm=openai.LLM(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             base_url="https://api.groq.com/openai/v1",
             api_key=os.environ.get("GROQ_API_KEY"),
         ),
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-        # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
         tts=murf.TTS(
             voice="Anisha",
             style="Conversation",
+            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+            text_pacing=True,
         ),
-        # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-        # See more at https://docs.livekit.io/agents/build/turns
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=False,
     )
 
-    # To use a realtime model instead of a voice pipeline, use the following session setup instead.
-    # (Note: This is for the OpenAI Realtime API. For other providers, see https://docs.livekit.io/agents/models/realtime/))
-    # 1. Install livekit-agents[openai]
-    # 2. Set OPENAI_API_KEY in .env.local
-    # 3. Add `from livekit.plugins import openai` to the top of this file
-    # 4. Use the following session setup instead of the version above
-    # session = AgentSession(
-    #     llm=openai.realtime.RealtimeModel(voice="marin")
-    # )
+    @session.on("user_speech_started")
+    def on_user_speech_started():
+        logger.info("[VOICE] User started speaking")
 
-    # # Add a virtual avatar to the session, if desired
-    # # For other providers, see https://docs.livekit.io/agents/models/avatar/
-    # avatar = hedra.AvatarSession(
-    #   avatar_id="...",  # See https://docs.livekit.io/agents/models/avatar/plugins/hedra
-    # )
-    # # Start the avatar and wait for it to join
-    # await avatar.start(session, room=ctx.room)
+    @session.on("user_speech_committed")
+    def on_user_speech_committed(msg: ChatMessage):
+        logger.info(f"[STT] Transcript:\n{msg.content}")
+        logger.info("[LLM] Request started")
 
-    # Start the session, which initializes the voice pipeline and warms up the models
+    @session.on("agent_speech_started")
+    def on_agent_speech_started():
+        logger.info("[TTS] Audio generation started")
+        logger.info("[LK] Audio playback started")
+        logger.info("[VOICE] Agent started speaking")
+
+    @session.on("agent_speech_committed")
+    def on_agent_speech_committed(msg: ChatMessage):
+        logger.info(f"[LLM] Response:\n{msg.content}")
+        logger.info("[LLM] Request completed")
+        logger.info("[VOICE] Agent finished speaking")
+
+    @session.on("agent_speech_interrupted")
+    def on_agent_speech_interrupted():
+        logger.info("[VOICE] Agent speech interrupted")
+
+
     assistant = Assistant(room=ctx.room)
+    assistant.active_session = session  # Attach session so handoff tool can access it
+
+    # Programmatically fetch and inject memory BEFORE starting the session
+    user_id = assistant._get_user_id()
+    try:
+        user_data = database.get_user(user_id)
+        if user_data and any(user_data.values()):
+            memory_context = f"\n\n[SYSTEM MEMORY INJECTION]\nYou already know this user. Their memory profile is: {json.dumps(user_data)}. Use this context naturally."
+            assistant.instructions += memory_context
+    except Exception as e:
+        logger.warning(f"Failed to fetch initial memory: {e}")
+
+    await ctx.connect()
+
     await session.start(
         agent=assistant,
         room=ctx.room
@@ -329,7 +479,6 @@ async def my_agent(ctx: JobContext):
         if (participant.identity and participant.identity.startswith("sip")) or getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
             logger.info("SIP Participant connected! Triggering outbound context...")
 
-            # Fetch latest active outbound call for real data
             active_call = None
             for call in database.get_outbound_calls():
                 if call['status'] in ['initiated', 'ringing', 'connected', 'answered']:
@@ -352,25 +501,18 @@ Act as the initiator. Keep your tone warm and professional.
 Do not wait for them to ask a question, you are the one calling them!
 If the user says "stop", "don't call me", or asks to opt out, apologize briefly and call `end_conversation`.
 """
-            from livekit.agents.llm import ChatMessage
-            session.chat_ctx.messages.append(ChatMessage(role="system", content=outbound_prompt))
+            session.chat_ctx.messages().append(ChatMessage(role="system", content=[outbound_prompt]))
 
             greeting = f"Hi {user_name}, this is Anisha calling from FinVoice. I'm calling regarding {reason}. Are you available to speak?"
             session.say(greeting, add_to_chat_ctx=True)
 
     @ctx.room.on("participant_connected")
     def on_participant_connected(participant: rtc.RemoteParticipant):
-        import asyncio
         asyncio.create_task(handle_sip_participant(participant))
 
-    # Join the room and connect to the user
-    await ctx.connect()
-
-    # Initialize Analytics
     call_id = ctx.room.name
     channel = "browser"
 
-    # Check if there are any SIP participants immediately available
     for participant in ctx.room.remote_participants.values():
         if (participant.identity and participant.identity.startswith("sip")) or getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
             channel = "twilio"
@@ -407,13 +549,10 @@ If the user says "stop", "don't call me", or asks to opt out, apologize briefly 
         except Exception as e:
             logger.error(f"Failed to update call analytics on disconnect: {e}")
 
-    # Greet any SIP participants already in the room
-    import asyncio
     for participant in ctx.room.remote_participants.values():
         if (participant.identity and participant.identity.startswith("sip")) or getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
             asyncio.create_task(handle_sip_participant(participant))
             break
-
 
 if __name__ == "__main__":
     cli.run_app(server)
